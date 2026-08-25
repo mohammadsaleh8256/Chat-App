@@ -1,6 +1,6 @@
-using AutoMapper;
 using ChatApp.Application.Interfaces;
 using ChatApp.Contracts.Dtos;
+using ChatApp.Infrastructure.Mapping;
 using ChatApp.Domain.Exceptions;
 using ChatApp.Infrastructure.Persistence;
 using Microsoft.EntityFrameworkCore;
@@ -10,13 +10,11 @@ namespace ChatApp.Infrastructure.Services;
 public class UserService : IUserService
 {
     private readonly ChatAppDbContext _db;
-    private readonly IMapper _mapper;
     private readonly IPresenceService _presence;
 
-    public UserService(ChatAppDbContext db, IMapper mapper, IPresenceService presence)
+    public UserService(ChatAppDbContext db, IPresenceService presence)
     {
         _db = db;
-        _mapper = mapper;
         _presence = presence;
     }
 
@@ -29,7 +27,9 @@ public class UserService : IUserService
         if (!string.IsNullOrWhiteSpace(search))
         {
             var s = search.Trim();
-            q = q.Where(u => u.FirstName.Contains(s) || u.LastName.Contains(s) || u.FullName.Contains(s) || u.PhoneNumber.Contains(s));
+            q = q.Where(u => EF.Functions.Like(u.FirstName, $"%{s}%")
+                          || EF.Functions.Like(u.LastName, $"%{s}%")
+                          || EF.Functions.Like(u.PhoneNumber, $"%{s}%"));
         }
 
         var users = await q
@@ -37,38 +37,36 @@ public class UserService : IUserService
             .Skip((page - 1) * pageSize).Take(pageSize)
             .ToListAsync(ct);
 
-        var dtos = _mapper.Map<List<UserSummaryDto>>(users);
-        // Update online status from presence
         var onlineIds = (await _presence.GetOnlineUserIdsAsync(ct)).ToHashSet();
-        foreach (var d in dtos)
-        {
-            d.GetType().GetProperty(nameof(UserSummaryDto.IsOnline))!
-                .SetValue(d, onlineIds.Contains(d.Id));
-        }
-        return dtos;
+        return users.Select(u => u.ToSummary(onlineIds.Contains(u.Id))).ToList();
     }
 
     public async Task<UserDto?> GetUserAsync(Guid id, CancellationToken ct = default)
     {
         var user = await _db.Users.AsNoTracking().FirstOrDefaultAsync(u => u.Id == id, ct);
-        return user is null ? null : _mapper.Map<UserDto>(user);
+        return user is null ? null : user.ToDto();
     }
 
     public async Task<UserDto?> GetProfileAsync(Guid userId, CancellationToken ct = default)
-    {
-        return await GetUserAsync(userId, ct);
-    }
+        => await GetUserAsync(userId, ct);
 
     public async Task<UserDto> UpdateProfileAsync(Guid userId, string firstName, string lastName, string? avatarUrl, string? bio, CancellationToken ct = default)
     {
-        var user = await _db.Users.FirstOrDefaultAsync(u => u.Id == userId, ct) ?? throw new EntityNotFoundException("User", userId);
+        if (string.IsNullOrWhiteSpace(firstName))
+            throw new DomainException("نام الزامی است.");
+        if (string.IsNullOrWhiteSpace(lastName))
+            throw new DomainException("نام خانوادگی الزامی است.");
+
+        var user = await _db.Users.FirstOrDefaultAsync(u => u.Id == userId, ct)
+            ?? throw new EntityNotFoundException("User", userId);
+
         user.FirstName = firstName.Trim();
         user.LastName = lastName.Trim();
         if (avatarUrl is not null) user.AvatarUrl = avatarUrl;
         if (bio is not null) user.Bio = bio;
         user.UpdatedAt = DateTime.UtcNow;
         await _db.SaveChangesAsync(ct);
-        return _mapper.Map<UserDto>(user);
+        return user.ToDto();
     }
 
     public async Task UpdatePresenceAsync(Guid userId, bool isOnline, CancellationToken ct = default)
@@ -85,6 +83,6 @@ public class UserService : IUserService
         var onlineIds = (await _presence.GetOnlineUserIdsAsync(ct)).ToList();
         if (onlineIds.Count == 0) return Array.Empty<UserSummaryDto>();
         var users = await _db.Users.AsNoTracking().Where(u => onlineIds.Contains(u.Id)).ToListAsync(ct);
-        return _mapper.Map<List<UserSummaryDto>>(users);
+        return users.Select(u => u.ToSummary(true)).ToList();
     }
 }

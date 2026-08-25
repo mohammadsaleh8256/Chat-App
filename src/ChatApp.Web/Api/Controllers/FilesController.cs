@@ -24,26 +24,38 @@ public class FilesController : ControllerBase
     [HttpPost("init")]
     public async Task<IActionResult> Init([FromBody] InitFileUploadRequest req, CancellationToken ct)
     {
-        var (uploadId, chunkDir, canResume, received) = await _files.InitUploadAsync(UserId(), req.FileName, req.FileSize, req.TotalChunks, req.ContentType, ct);
+        if (req is null || string.IsNullOrWhiteSpace(req.FileName) || req.FileSize <= 0 || req.TotalChunks <= 0)
+            return BadRequest(new { Error = "Invalid request." });
+
+        var (uploadId, chunkDir, canResume, received) = await _files.InitUploadAsync(
+            UserId(), req.FileName, req.FileSize, req.TotalChunks, req.ContentType, ct);
         return Ok(new { UploadId = uploadId, ChunkDirectory = chunkDir, CanResume = canResume, ReceivedChunks = received });
     }
 
     [HttpPost("{id:guid}/chunk/{index:int}")]
-    [RequestSizeLimit(long.MaxValue)]
-    [RequestFormLimits(MultipartBodyLengthLimit = long.MaxValue)]
+    [RequestSizeLimit(20 * 1024 * 1024)]  // 20MB max per chunk
     public async Task<IActionResult> UploadChunk(Guid id, int index, CancellationToken ct)
     {
-        if (Request.ContentLength is null) return BadRequest("Missing content length.");
-        using var ms = new MemoryStream((int)Request.ContentLength.Value);
-        await Request.Body.CopyToAsync(ms, ct);
-        ms.Position = 0;
-        var (completed, received, uploaded) = await _files.UploadChunkAsync(UserId(), id, index, ms, ct);
-        return Ok(new { Completed = completed, ReceivedChunks = received, UploadedBytes = uploaded });
+        // Stream the chunk directly to the storage layer without loading entire body into memory.
+        // The service layer (LocalFileStorage) already handles streaming via Stream.CopyToAsync.
+        var stream = new MemoryStream();
+        try
+        {
+            await Request.Body.CopyToAsync(stream, 81920, ct);
+            stream.Position = 0;
+            var (completed, received, uploaded) = await _files.UploadChunkAsync(UserId(), id, index, stream, ct);
+            return Ok(new { Completed = completed, ReceivedChunks = received, UploadedBytes = uploaded });
+        }
+        finally
+        {
+            await stream.DisposeAsync();
+        }
     }
 
     [HttpPost("{id:guid}/complete")]
     public async Task<IActionResult> Complete(Guid id, [FromBody] CompleteFileUploadRequest req, CancellationToken ct)
     {
+        if (req is null) return BadRequest();
         var (attachmentId, downloadUrl, thumbnailUrl) = await _files.CompleteUploadAsync(UserId(), id, req.FileHash, ct);
         return Ok(new { AttachmentId = attachmentId, DownloadUrl = downloadUrl, ThumbnailUrl = thumbnailUrl });
     }
@@ -66,6 +78,8 @@ public class FilesController : ControllerBase
     public async Task<IActionResult> Download(Guid id, CancellationToken ct)
     {
         var (stream, contentType, fileName) = await _files.DownloadAsync(UserId(), id, ct);
+        // Set Content-Disposition with proper filename encoding for RTL
+        Response.Headers.ContentDisposition = $"attachment; filename*=UTF-8''{Uri.EscapeDataString(fileName)}";
         return File(stream, contentType, fileName);
     }
 }

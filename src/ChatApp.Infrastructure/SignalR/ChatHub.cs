@@ -32,10 +32,8 @@ public class ChatHub : Hub
 
         await _presence.UserConnectedAsync(userId, Context.ConnectionId, Context.ConnectionAborted);
 
-        // Notify contacts that this user is online
-        await Clients.All.SendAsync("UserOnline", userId);
-
-        // Auto-join all conversation groups the user is a member of
+        // Auto-join all conversation groups the user is a member of.
+        // This way, only users who share a conversation with this user will receive the UserOnline notification.
         var conversationIds = await (
             from p in _db.ConversationParticipants.AsNoTracking()
             where p.UserId == userId
@@ -43,7 +41,11 @@ public class ChatHub : Hub
         ).ToListAsync(Context.ConnectionAborted);
 
         foreach (var cid in conversationIds)
+        {
             await Groups.AddToGroupAsync(Context.ConnectionId, GroupName(cid), Context.ConnectionAborted);
+            // Notify only members of this conversation that the user is online
+            await Clients.Group(GroupName(cid)).SendAsync("UserOnline", userId, Context.ConnectionAborted);
+        }
 
         _log.LogInformation("User {UserId} connected ({ConnectionId})", userId, Context.ConnectionId);
         await base.OnConnectedAsync();
@@ -56,11 +58,21 @@ public class ChatHub : Hub
 
         await _presence.UserDisconnectedAsync(userId, Context.ConnectionId, Context.ConnectionAborted);
 
-        // Only mark offline if no remaining connections
+        // Only notify UserOffline if no remaining connections for this user
         var stillOnline = await _presence.IsUserOnlineAsync(userId);
         if (!stillOnline)
         {
-            await Clients.All.SendAsync("UserOffline", userId);
+            // Notify only members of conversations this user is in
+            var conversationIds = await (
+                from p in _db.ConversationParticipants.AsNoTracking()
+                where p.UserId == userId
+                select p.ConversationId
+            ).ToListAsync(Context.ConnectionAborted);
+
+            foreach (var cid in conversationIds)
+            {
+                await Clients.Group(GroupName(cid)).SendAsync("UserOffline", userId, Context.ConnectionAborted);
+            }
         }
 
         _log.LogInformation("User {UserId} disconnected ({ConnectionId})", userId, Context.ConnectionId);

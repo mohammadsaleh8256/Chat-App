@@ -57,6 +57,17 @@ chatApp.scrollToBottom = (containerId) => {
     if (el) el.scrollTop = el.scrollHeight;
 };
 
+// Trigger click on an element by id (used to programmatically open file picker)
+chatApp.clickElement = (elementId) => {
+    const el = document.getElementById(elementId);
+    if (el) el.click();
+};
+
+// Open URL in new tab (safe wrapper around window.open)
+chatApp.openUrl = (url) => {
+    window.open(url, '_blank');
+};
+
 // Init on load
 (function () {
     chatApp.theme.init();

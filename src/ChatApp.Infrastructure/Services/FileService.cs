@@ -1,10 +1,10 @@
-using AutoMapper;
 using ChatApp.Application.Interfaces;
 using ChatApp.Contracts.Dtos;
-using ChatApp.Contracts.Responses;
+using ChatApp.Infrastructure.Mapping;
 using ChatApp.Domain.Entities;
 using ChatApp.Domain.Enums;
 using ChatApp.Domain.Exceptions;
+using ChatApp.Domain.ValueObjects;
 using ChatApp.Infrastructure.Authentication;
 using ChatApp.Infrastructure.Persistence;
 using Microsoft.EntityFrameworkCore;
@@ -17,15 +17,13 @@ public class FileService : IFileService
 {
     private readonly ChatAppDbContext _db;
     private readonly IFileStorage _storage;
-    private readonly IMapper _mapper;
     private readonly ILogger<FileService> _log;
     private readonly long _maxChunkSize;
 
-    public FileService(ChatAppDbContext db, IFileStorage storage, IMapper mapper, IConfiguration cfg, ILogger<FileService> log)
+    public FileService(ChatAppDbContext db, IFileStorage storage, IConfiguration cfg, ILogger<FileService> log)
     {
         _db = db;
         _storage = storage;
-        _mapper = mapper;
         _log = log;
         _maxChunkSize = long.TryParse(cfg["FileStorage:MaxChunkSize"], out var s) ? s : 5L * 1024 * 1024;
     }
@@ -63,7 +61,6 @@ public class FileService : IFileService
         _db.FileUploads.Add(upload);
         await _db.SaveChangesAsync(ct);
 
-        // Check if chunks already exist (resume scenario)
         var (received, _) = await _storage.GetChunkMapAsync(chunkDir, totalChunks, ct);
         if (received > 0)
         {
@@ -87,10 +84,8 @@ public class FileService : IFileService
         upload.Status = UploadStatus.Uploading;
         await _storage.SaveChunkAsync(chunkStream, upload.ChunkDirectory, chunkIndex, ct);
 
-        // Update progress
         var (received, _) = await _storage.GetChunkMapAsync(upload.ChunkDirectory, upload.TotalChunks, ct);
         upload.ReceivedChunks = received;
-        // Estimate uploaded bytes
         upload.UploadedBytes = (long)((double)received / upload.TotalChunks * upload.Size);
         upload.UpdatedAt = DateTime.UtcNow;
         await _db.SaveChangesAsync(ct);
@@ -108,13 +103,12 @@ public class FileService : IFileService
         if (received != upload.TotalChunks)
             throw new DomainException($"فقط {received} از {upload.TotalChunks} قطعه دریافت شده است. لطفاً آپلود را ادامه دهید.");
 
-        // Merge chunks to final file
         await _storage.MergeChunksAsync(upload.ChunkDirectory, upload.RelativePath, upload.TotalChunks, ct);
 
-        // Verify file hash if provided
         if (!string.IsNullOrEmpty(fileHash))
         {
             await using var fs = await _storage.OpenReadAsync(upload.RelativePath, ct);
+            fs.Position = 0;
             var actualHash = HashHelper.Sha256(fs);
             if (!string.Equals(actualHash, fileHash, StringComparison.OrdinalIgnoreCase))
             {
@@ -135,12 +129,10 @@ public class FileService : IFileService
 
     public async Task<(Stream Stream, string ContentType, string FileName)> DownloadAsync(Guid userId, Guid attachmentId, CancellationToken ct = default)
     {
-        // attachmentId can be a MessageAttachment Id or FileUpload Id - we support both
         // Try MessageAttachment first
         var ma = await _db.MessageAttachments.AsNoTracking().FirstOrDefaultAsync(a => a.Id == attachmentId, ct);
         if (ma is not null)
         {
-            // Verify access: user must be a participant in the conversation
             var msg = await _db.Messages.AsNoTracking().FirstOrDefaultAsync(m => m.Id == ma.MessageId, ct);
             if (msg is not null)
             {
@@ -175,6 +167,6 @@ public class FileService : IFileService
         var upload = await _db.FileUploads.AsNoTracking().FirstOrDefaultAsync(f => f.Id == uploadId, ct);
         if (upload is null) return null;
         if (upload.UserId != userId) throw new AuthorizationException();
-        return _mapper.Map<FileUploadDto>(upload);
+        return upload.ToDto();
     }
 }

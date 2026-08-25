@@ -64,13 +64,13 @@ public class ChatHubClient : IChatHubClient
     {
         if (_hub is not null) return;
 
-        var token = await _tokens.GetAccessTokenAsync();
         var hubUrl = _nav.ToAbsoluteUri("/hubs/chat").ToString();
 
         _hub = new HubConnectionBuilder()
             .WithUrl(hubUrl, opt =>
             {
-                opt.AccessTokenProvider = () => Task.FromResult(token);
+                // Re-fetch token on each reconnect — avoids stale-token bug after refresh
+                opt.AccessTokenProvider = async () => await _tokens.GetAccessTokenAsync();
             })
             .WithAutomaticReconnect(new[] { TimeSpan.Zero, TimeSpan.FromSeconds(2), TimeSpan.FromSeconds(5), TimeSpan.FromSeconds(10) })
             .Build();

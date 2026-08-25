@@ -1,6 +1,6 @@
-using AutoMapper;
 using ChatApp.Application.Interfaces;
 using ChatApp.Contracts.Dtos;
+using ChatApp.Infrastructure.Mapping;
 using ChatApp.Domain.Entities;
 using ChatApp.Domain.Exceptions;
 using ChatApp.Infrastructure.Persistence;
@@ -11,13 +11,8 @@ namespace ChatApp.Infrastructure.Services;
 public class ConversationService : IConversationService
 {
     private readonly ChatAppDbContext _db;
-    private readonly IMapper _mapper;
 
-    public ConversationService(ChatAppDbContext db, IMapper mapper)
-    {
-        _db = db;
-        _mapper = mapper;
-    }
+    public ConversationService(ChatAppDbContext db) => _db = db;
 
     public async Task<ConversationDto> CreateOrGetAsync(Guid currentUserId, Guid otherUserId, CancellationToken ct = default)
     {
@@ -27,7 +22,7 @@ public class ConversationService : IConversationService
         var other = await _db.Users.AsNoTracking().FirstOrDefaultAsync(u => u.Id == otherUserId, ct);
         if (other is null) throw new EntityNotFoundException("User", otherUserId);
 
-        // Find existing private conversation between these two users
+        // Find existing private conversation
         var existing = await (
             from c in _db.Conversations.AsNoTracking()
             where !c.IsGroup && c.DeletedAt == null
@@ -38,10 +33,8 @@ public class ConversationService : IConversationService
 
         if (existing is not null)
         {
-            var dto = _mapper.Map<ConversationDto>(existing);
-            dto.OtherParticipant = _mapper.Map<UserSummaryDto>(other);
-            dto.UnreadCount = await GetUnreadCountAsync(currentUserId, existing.Id, ct);
-            return dto;
+            var unread = await GetUnreadCountAsync(currentUserId, existing.Id, ct);
+            return existing.ToDto(other, unread);
         }
 
         var conv = new Conversation
@@ -65,9 +58,7 @@ public class ConversationService : IConversationService
         });
         await _db.SaveChangesAsync(ct);
 
-        var result = _mapper.Map<ConversationDto>(conv);
-        result.OtherParticipant = _mapper.Map<UserSummaryDto>(other);
-        return result;
+        return conv.ToDto(other, 0);
     }
 
     public async Task<IReadOnlyList<ConversationDto>> ListConversationsAsync(Guid currentUserId, int page, int pageSize, CancellationToken ct = default)
@@ -85,17 +76,14 @@ public class ConversationService : IConversationService
         var result = new List<ConversationDto>();
         foreach (var c in conversations)
         {
-            var dto = _mapper.Map<ConversationDto>(c);
-            // Other participant (for private)
             var otherParticipant = await (
                 from p in _db.ConversationParticipants.AsNoTracking()
                 join u in _db.Users.AsNoTracking() on p.UserId equals u.Id
                 where p.ConversationId == c.Id && p.UserId != currentUserId
                 select u
             ).FirstOrDefaultAsync(ct);
-            dto.OtherParticipant = otherParticipant is not null ? _mapper.Map<UserSummaryDto>(otherParticipant) : null;
-            dto.UnreadCount = await GetUnreadCountAsync(currentUserId, c.Id, ct);
-            result.Add(dto);
+            var unread = await GetUnreadCountAsync(currentUserId, c.Id, ct);
+            result.Add(c.ToDto(otherParticipant, unread));
         }
         return result;
     }
@@ -104,19 +92,19 @@ public class ConversationService : IConversationService
     {
         var conv = await _db.Conversations.AsNoTracking().FirstOrDefaultAsync(c => c.Id == conversationId, ct);
         if (conv is null) return null;
+
         var isMember = await _db.ConversationParticipants
             .AnyAsync(p => p.ConversationId == conversationId && p.UserId == currentUserId, ct);
         if (!isMember) throw new AuthorizationException();
-        var dto = _mapper.Map<ConversationDto>(conv);
+
         var other = await (
             from p in _db.ConversationParticipants.AsNoTracking()
             join u in _db.Users.AsNoTracking() on p.UserId equals u.Id
             where p.ConversationId == conversationId && p.UserId != currentUserId
             select u
         ).FirstOrDefaultAsync(ct);
-        dto.OtherParticipant = other is not null ? _mapper.Map<UserSummaryDto>(other) : null;
-        dto.UnreadCount = await GetUnreadCountAsync(currentUserId, conversationId, ct);
-        return dto;
+        var unread = await GetUnreadCountAsync(currentUserId, conversationId, ct);
+        return conv.ToDto(other, unread);
     }
 
     public async Task<bool> BelongsToConversationAsync(Guid userId, Guid conversationId, CancellationToken ct = default)
@@ -135,17 +123,15 @@ public class ConversationService : IConversationService
         var lastReadAt = await (
             from p in _db.ConversationParticipants.AsNoTracking()
             where p.ConversationId == conversationId && p.UserId == userId
-            select p.LastReadAt
+            select (DateTime?)p.LastReadAt
         ).FirstOrDefaultAsync(ct);
 
         var q = _db.Messages.AsNoTracking().Where(m =>
             m.ConversationId == conversationId &&
             m.DeletedAt == null &&
             m.SenderId != userId);
-
         if (lastReadAt.HasValue)
             q = q.Where(m => m.CreatedAt > lastReadAt.Value);
-
         return await q.CountAsync(ct);
     }
 }

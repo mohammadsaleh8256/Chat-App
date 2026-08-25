@@ -15,7 +15,7 @@
                 <h2>گفتگوی جدید</h2>
             </div>
             <div class="search-bar">
-                <input type="search" value="@SearchQuery" @oninput="@(e => { SearchQuery = e.Value?.ToString() ?? ""; _ = SearchAsync(); })" placeholder="جستجوی کاربر..." />
+                <input type="search" value="@SearchQuery" @oninput="OnSearchInput" placeholder="جستجوی کاربر..." />
             </div>
             @if (Searching)
             {
@@ -36,11 +36,11 @@
                             <UserAvatar Url="@u.AvatarUrl" Name="@u.FullName" Size="48" />
                             <div class="user-info-row">
                                 <span class="name">@u.FullName</span>
-                                <span class="phone">@(u.PhoneNumber?.ToDisplayPhone())</span>
+                                <span class="phone">@(FormatPhone(u.PhoneNumber))</span>
                             </div>
                             <div class="status">
                                 <span class="dot @(u.IsOnline ? "online" : "offline")"></span>
-                                @(u.IsOnline ? "آنلاین" : (u.LastSeen.HasValue ? "آخرین بازدید " + u.LastSeen.Value.ToPersianTime() : "آفلاین"))
+                                @(u.IsOnline ? "آنلاین" : (u.LastSeen.HasValue ? "آخرین بازدید " + u.LastSeen.Value.ToRelativeTime() : "آفلاین"))
                             </div>
                         </div>
                     }
@@ -49,7 +49,7 @@
         </div>
     </Authorized>
     <NotAuthorized>
-        <p>در حال انتقال...</p>
+        <p class="redirecting">در حال انتقال...</p>
     </NotAuthorized>
 </AuthorizeView>
 
@@ -74,7 +74,7 @@
         Searching = true;
         try
         {
-            var url = $"/api/users?pageSize=100";
+            var url = "/api/users?pageSize=100";
             if (!string.IsNullOrEmpty(search)) url += $"&search={Uri.EscapeDataString(search)}";
             Users = await Http.GetFromJsonAsync<List<UserSummaryDto>>(url) ?? new();
         }
@@ -82,13 +82,10 @@
         Searching = false;
     }
 
-    protected override async Task OnAfterRenderAsync(bool firstRender)
+    private void OnSearchInput(ChangeEventArgs e)
     {
-        if (firstRender)
-        {
-            // Watch searchQuery changes
-        }
-        await base.OnAfterRenderAsync(firstRender);
+        SearchQuery = e.Value?.ToString() ?? "";
+        _ = SearchAsync();
     }
 
     private async Task SearchAsync()
@@ -98,22 +95,30 @@
 
     private async Task StartConversationAsync(Guid userId)
     {
-        var resp = await Http.PostAsJsonAsync("/api/conversations", new { OtherUserId = userId });
-        if (resp.IsSuccessStatusCode)
+        try
         {
-            var conv = await resp.Content.ReadFromJsonAsync<ConversationDto>();
-            Nav.NavigateTo($"/app?conversationId={conv!.Id}", forceLoad: true);
+            var resp = await Http.PostAsJsonAsync("/api/conversations", new CreateConversationRequest(userId));
+            if (resp.IsSuccessStatusCode)
+            {
+                // Just go back to /app — the new conversation will appear at the top of the list.
+                Nav.NavigateTo("/app", forceLoad: true);
+            }
+            else
+            {
+                await Toast.ShowErrorAsync("ایجاد گفتگو ناموفق بود.");
+            }
         }
-        else
+        catch
         {
-            await Toast.ShowErrorAsync("ایجاد گفتگو ناموفق بود.");
+            await Toast.ShowErrorAsync("خطا در ارتباط با سرور.");
         }
     }
-}
 
-@functions {
-}
-
-@code {
-    // Provide a helper for showing the phone in display format
+    private static string FormatPhone(string? phone)
+    {
+        if (string.IsNullOrEmpty(phone)) return "";
+        if (phone.StartsWith("+98")) return "0" + phone[3..];
+        if (phone.StartsWith("98")) return "0" + phone[2..];
+        return phone;
+    }
 }

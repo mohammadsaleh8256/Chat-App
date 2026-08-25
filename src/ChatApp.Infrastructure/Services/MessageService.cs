@@ -1,6 +1,6 @@
-using AutoMapper;
 using ChatApp.Application.Interfaces;
 using ChatApp.Contracts.Dtos;
+using ChatApp.Infrastructure.Mapping;
 using ChatApp.Domain.Entities;
 using ChatApp.Domain.Enums;
 using ChatApp.Domain.Exceptions;
@@ -12,16 +12,16 @@ namespace ChatApp.Infrastructure.Services;
 public class MessageService : IMessageService
 {
     private readonly ChatAppDbContext _db;
-    private readonly IMapper _mapper;
 
-    public MessageService(ChatAppDbContext db, IMapper mapper)
-    {
-        _db = db;
-        _mapper = mapper;
-    }
+    public MessageService(ChatAppDbContext db) => _db = db;
 
     public async Task<MessageDto> SendTextAsync(Guid senderId, Guid conversationId, string content, Guid? replyToMessageId, CancellationToken ct = default)
     {
+        if (string.IsNullOrWhiteSpace(content))
+            throw new DomainException("محتوای پیام خالی است.");
+        if (content.Length > 8000)
+            throw new DomainException("طول پیام بیش از حد مجاز (۸۰۰۰ کاراکتر) است.");
+
         await AssertMemberAsync(senderId, conversationId, ct);
 
         var msg = new Message
@@ -37,7 +37,6 @@ public class MessageService : IMessageService
         };
         _db.Messages.Add(msg);
 
-        // Update conversation last message
         var conv = await _db.Conversations.FirstOrDefaultAsync(c => c.Id == conversationId, ct);
         if (conv is not null)
         {
@@ -61,6 +60,8 @@ public class MessageService : IMessageService
             ?? throw new EntityNotFoundException("FileUpload", attachmentId);
         if (upload.UserId != senderId)
             throw new AuthorizationException();
+        if (upload.Status != Domain.Enums.UploadStatus.Completed)
+            throw new DomainException("فایل هنوز کامل آپلود نشده است.");
 
         var attachmentType = DetermineAttachmentType(upload.OriginalFileName, upload.ContentType);
         var msg = new Message
@@ -90,7 +91,6 @@ public class MessageService : IMessageService
         };
         _db.MessageAttachments.Add(ma);
 
-        // Update conversation preview
         var conv = await _db.Conversations.FirstOrDefaultAsync(c => c.Id == conversationId, ct);
         if (conv is not null)
         {
@@ -109,13 +109,14 @@ public class MessageService : IMessageService
         page = Math.Max(1, page);
         pageSize = Math.Clamp(pageSize, 1, 200);
 
-        var msgs = await _db.Messages.AsNoTracking()
+        var msgIds = await _db.Messages.AsNoTracking()
             .Where(m => m.ConversationId == conversationId && m.DeletedAt == null)
             .OrderByDescending(m => m.CreatedAt)
             .Skip((page - 1) * pageSize).Take(pageSize)
+            .Select(m => m.Id)
             .ToListAsync(ct);
 
-        return await BuildDtosAsync(msgs, ct);
+        return await BuildDtosAsync(msgIds, ct);
     }
 
     public async Task<IReadOnlyList<MessageDto>> GetMessagesBeforeAsync(Guid userId, Guid conversationId, DateTime before, int pageSize, CancellationToken ct = default)
@@ -123,13 +124,14 @@ public class MessageService : IMessageService
         await AssertMemberAsync(userId, conversationId, ct);
         pageSize = Math.Clamp(pageSize, 1, 200);
 
-        var msgs = await _db.Messages.AsNoTracking()
+        var msgIds = await _db.Messages.AsNoTracking()
             .Where(m => m.ConversationId == conversationId && m.DeletedAt == null && m.CreatedAt < before)
             .OrderByDescending(m => m.CreatedAt)
             .Take(pageSize)
+            .Select(m => m.Id)
             .ToListAsync(ct);
 
-        return await BuildDtosAsync(msgs, ct);
+        return await BuildDtosAsync(msgIds, ct);
     }
 
     public async Task<MessageDto?> GetMessageAsync(Guid userId, Guid messageId, CancellationToken ct = default)
@@ -137,13 +139,17 @@ public class MessageService : IMessageService
         var msg = await _db.Messages.AsNoTracking().FirstOrDefaultAsync(m => m.Id == messageId, ct);
         if (msg is null) return null;
         await AssertMemberAsync(userId, msg.ConversationId, ct);
-        return await BuildDtoAsync(msg.Id, ct);
+        var list = await BuildDtosAsync(new[] { msg.Id }, ct);
+        return list.Count == 0 ? null : list[0];
     }
 
     public async Task MarkDeliveredAsync(Guid userId, Guid conversationId, CancellationToken ct = default)
     {
         var msgs = await _db.Messages
-            .Where(m => m.ConversationId == conversationId && m.SenderId != userId && m.Status == MessageStatus.Sent && m.DeletedAt == null)
+            .Where(m => m.ConversationId == conversationId
+                && m.SenderId != userId
+                && m.Status == MessageStatus.Sent
+                && m.DeletedAt == null)
             .ToListAsync(ct);
         foreach (var m in msgs)
         {
@@ -165,7 +171,6 @@ public class MessageService : IMessageService
             msg.ReadAt ??= DateTime.UtcNow;
         }
 
-        // Add read receipt (idempotent)
         var receiptExists = await _db.MessageReadReceipts.AnyAsync(r => r.MessageId == messageId && r.UserId == userId, ct);
         if (!receiptExists && msg.SenderId != userId)
         {
@@ -177,9 +182,11 @@ public class MessageService : IMessageService
             });
         }
 
-        // Mark all prior unread messages in this conversation as read too
         var prior = await _db.Messages
-            .Where(m => m.ConversationId == msg.ConversationId && m.SenderId != userId && m.Status != MessageStatus.Read && m.CreatedAt <= msg.CreatedAt)
+            .Where(m => m.ConversationId == msg.ConversationId
+                && m.SenderId != userId
+                && m.Status != MessageStatus.Read
+                && m.CreatedAt <= msg.CreatedAt)
             .ToListAsync(ct);
         foreach (var p in prior)
         {
@@ -229,7 +236,6 @@ public class MessageService : IMessageService
         }
         await _db.SaveChangesAsync(ct);
 
-        // Copy attachments if any
         var attachments = await _db.MessageAttachments.AsNoTracking().Where(a => a.MessageId == messageId).ToListAsync(ct);
         foreach (var a in attachments)
         {
@@ -252,18 +258,16 @@ public class MessageService : IMessageService
     }
 
     public Task<int> GetUnreadCountAsync(Guid userId, Guid conversationId, CancellationToken ct = default)
-    {
-        return (
+        => (
             from p in _db.ConversationParticipants.AsNoTracking()
             where p.ConversationId == conversationId && p.UserId == userId
-            select p.LastReadAt
+            select (DateTime?)p.LastReadAt
         ).SelectMany(lastRead => _db.Messages.AsNoTracking().Where(m =>
             m.ConversationId == conversationId &&
             m.SenderId != userId &&
             m.DeletedAt == null &&
             (lastRead == null || m.CreatedAt > lastRead)))
          .CountAsync(ct);
-    }
 
     private async Task AssertMemberAsync(Guid userId, Guid conversationId, CancellationToken ct)
     {
@@ -273,52 +277,61 @@ public class MessageService : IMessageService
 
     private async Task<MessageDto> BuildDtoAsync(Guid msgId, CancellationToken ct)
     {
-        var list = await BuildDtosAsync(new List<Message> { (await _db.Messages.AsNoTracking().FirstAsync(m => m.Id == msgId, ct)) }, ct);
+        var list = await BuildDtosAsync(new[] { msgId }, ct);
+        if (list.Count == 0)
+            throw new EntityNotFoundException("Message", msgId);
         return list[0];
     }
 
-    private async Task<IReadOnlyList<MessageDto>> BuildDtosAsync(List<Message> msgs, CancellationToken ct)
+    private async Task<IReadOnlyList<MessageDto>> BuildDtosAsync(IReadOnlyCollection<Guid> msgIds, CancellationToken ct)
     {
+        if (msgIds.Count == 0) return Array.Empty<MessageDto>();
+
+        var msgs = await _db.Messages.AsNoTracking()
+            .Where(m => msgIds.Contains(m.Id))
+            .ToListAsync(ct);
+
         if (msgs.Count == 0) return Array.Empty<MessageDto>();
-        var ids = msgs.Select(m => m.Id).ToList();
-        var senders = await _db.Users.AsNoTracking().Where(u => msgs.Select(m => m.SenderId).Distinct().Contains(u.Id)).ToDictionaryAsync(u => u.Id, ct);
+
+        var senderIds = msgs.Select(m => m.SenderId).Distinct().ToList();
+        var senders = await _db.Users.AsNoTracking()
+            .Where(u => senderIds.Contains(u.Id))
+            .ToDictionaryAsync(u => u.Id, ct);
+
         var replyIds = msgs.Where(m => m.ReplyToMessageId.HasValue).Select(m => m.ReplyToMessageId!.Value).ToList();
         var replies = replyIds.Count > 0
             ? await _db.Messages.AsNoTracking().Where(m => replyIds.Contains(m.Id)).ToDictionaryAsync(m => m.Id, ct)
             : new Dictionary<Guid, Message>();
-        var attachments = await _db.MessageAttachments.AsNoTracking().Where(a => ids.Contains(a.MessageId)).ToListAsync(ct);
 
-        var result = new List<MessageDto>();
+        var attachments = await _db.MessageAttachments.AsNoTracking()
+            .Where(a => msgIds.Contains(a.MessageId))
+            .ToListAsync(ct);
+
+        var result = new List<MessageDto>(msgs.Count);
         foreach (var m in msgs)
         {
-            var dto = new MessageDto(
+            var sender = senders.TryGetValue(m.SenderId, out var s) ? s : null;
+            var replyPreview = m.ReplyToMessageId.HasValue && replies.TryGetValue(m.ReplyToMessageId.Value, out var r) ? r.Content : null;
+
+            result.Add(new MessageDto(
                 Id: m.Id,
                 ConversationId: m.ConversationId,
                 SenderId: m.SenderId,
-                SenderName: senders.TryGetValue(m.SenderId, out var s) ? s.FullName : "",
-                SenderAvatarUrl: senders.TryGetValue(m.SenderId, out var s2) ? s2.AvatarUrl : null,
+                SenderName: sender?.FullName ?? "",
+                SenderAvatarUrl: sender?.AvatarUrl,
                 Content: m.Content,
                 Type: m.Type.ToString(),
                 Status: m.Status.ToString(),
                 ReplyToMessageId: m.ReplyToMessageId,
-                ReplyToPreview: m.ReplyToMessageId.HasValue && replies.TryGetValue(m.ReplyToMessageId.Value, out var r) ? r.Content : null,
+                ReplyToPreview: replyPreview,
                 CreatedAt: m.CreatedAt,
                 UpdatedAt: m.UpdatedAt,
                 DeletedAt: m.DeletedAt,
                 IsEdited: m.IsEdited,
                 DeliveredAt: m.DeliveredAt,
                 ReadAt: m.ReadAt,
-                Attachments: attachments.Where(a => a.MessageId == m.Id).Select(a => new AttachmentDto(
-                    Id: a.Id,
-                    OriginalFileName: a.OriginalFileName,
-                    Size: a.Size,
-                    ContentType: a.ContentType,
-                    Type: a.Type.ToString(),
-                    ThumbnailUrl: a.ThumbnailPath,
-                    DownloadUrl: $"/api/files/{a.Id}"
-                )).ToList()
-            );
-            result.Add(dto);
+                Attachments: attachments.Where(a => a.MessageId == m.Id).Select(a => a.ToDto()).ToList()
+            ));
         }
         return result;
     }

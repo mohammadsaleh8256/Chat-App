@@ -24,7 +24,7 @@ public readonly record struct PhoneNumber
 
         var digits = new string(raw.Where(char.IsDigit).ToArray());
 
-        // 09162744975 -> +989162744975
+        // 09162744975 (11 digits, starts with 09) -> +989162744975
         if (digits.Length == 11 && digits.StartsWith("09"))
             return new PhoneNumber("+98" + digits[1..]);
 
@@ -32,13 +32,19 @@ public readonly record struct PhoneNumber
         if (digits.Length == 10 && digits.StartsWith("9"))
             return new PhoneNumber("+98" + digits);
 
-        // +98 9162744975 already (12 digits starting with 98)
+        // 989162744975 (12 digits, already starts with country code 98) -> +989162744975
         if (digits.Length == 12 && digits.StartsWith("98"))
             return new PhoneNumber("+" + digits);
 
-        // 00989162744975 stripped to 989162744975 (13 digits)
-        if (digits.Length == 13 && digits.StartsWith("989"))
-            return new PhoneNumber("+" + digits[..12] + digits[12..]);
+        // 00989162744975 (14 digits with 00 prefix) -> strip 00 -> 989162744975 -> +989162744975
+        if (digits.Length == 14 && digits.StartsWith("0098"))
+            return new PhoneNumber("+" + digits[2..]);
+
+        // Some users may type +989162744975 which becomes 00989162744975 after stripping the +
+        // (length 13 because +98 prefix gives 12 digits without +, but with 00 prefix gives 14)
+        // Handle 13-digit case: assume first 0 is spurious
+        if (digits.Length == 13 && digits.StartsWith("098"))
+            return new PhoneNumber("+" + digits[1..]);
 
         throw new DomainException($"شماره تلفن «{raw}» معتبر نیست. فرمت صحیح: 09162744975 یا +989162744975");
     }

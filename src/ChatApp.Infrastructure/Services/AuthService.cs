@@ -1,6 +1,6 @@
-using AutoMapper;
 using ChatApp.Application.Interfaces;
 using ChatApp.Contracts.Dtos;
+using ChatApp.Infrastructure.Mapping;
 using ChatApp.Contracts.Responses;
 using ChatApp.Domain.Entities;
 using ChatApp.Domain.Enums;
@@ -18,31 +18,35 @@ public class AuthService : IAuthService
 {
     private readonly ChatAppDbContext _db;
     private readonly ITokenService _tokenService;
-    private readonly IMapper _mapper;
     private readonly ILogger<AuthService> _log;
 
-    public AuthService(ChatAppDbContext db, ITokenService tokenService, IMapper mapper, ILogger<AuthService> log)
+    public AuthService(ChatAppDbContext db, ITokenService tokenService, ILogger<AuthService> log)
     {
         _db = db;
         _tokenService = tokenService;
-        _mapper = mapper;
         _log = log;
     }
 
     public async Task<AuthResponse> RegisterAsync(string firstName, string lastName, string phoneNumber, string password, string? ipAddress, CancellationToken ct = default)
     {
-        // Normalize phone
+        if (string.IsNullOrWhiteSpace(firstName))
+            throw new DomainException("نام الزامی است.");
+        if (string.IsNullOrWhiteSpace(lastName))
+            throw new DomainException("نام خانوادگی الزامی است.");
+        if (string.IsNullOrWhiteSpace(password) || password.Length < 6)
+            throw new DomainException("رمز عبور باید حداقل ۶ کاراکتر باشد.");
+
         var phone = PhoneNumber.Create(phoneNumber);
 
-        // Check uniqueness
         var existing = await _db.Users.AnyAsync(u => u.NormalizedPhoneNumber == phone.E164, ct);
         if (existing)
             throw new DomainException("شماره تلفن قبلاً ثبت شده است.");
 
-        // Get admin phone from settings
         var adminPhoneSetting = await _db.AppSettings.FirstOrDefaultAsync(s => s.Key == "INITIAL_ADMIN_PHONE", ct);
         var adminPhone = adminPhoneSetting?.Value;
-        var isAdmin = !string.IsNullOrEmpty(adminPhone) && PhoneNumber.TryParse(adminPhone, out var ap) && ap.E164 == phone.E164;
+        var isAdmin = !string.IsNullOrEmpty(adminPhone)
+            && PhoneNumber.TryParse(adminPhone, out var ap)
+            && ap.E164 == phone.E164;
 
         var user = new User
         {
@@ -68,7 +72,7 @@ public class AuthService : IAuthService
 
         _log.LogInformation("User registered: {Phone} (Role={Role})", user.PhoneNumber, user.Role);
 
-        return new AuthResponse(access, refresh, accessExpires, _mapper.Map<UserDto>(user));
+        return new AuthResponse(access, refresh, accessExpires, user.ToDto());
     }
 
     public async Task<AuthResponse> LoginAsync(string phoneNumber, string password, string? ipAddress, CancellationToken ct = default)
@@ -93,7 +97,7 @@ public class AuthService : IAuthService
         await _db.SaveChangesAsync(ct);
 
         _log.LogInformation("User logged in: {Phone}", user.PhoneNumber);
-        return new AuthResponse(access, refresh, accessExpires, _mapper.Map<UserDto>(user));
+        return new AuthResponse(access, refresh, accessExpires, user.ToDto());
     }
 
     public async Task LogoutAsync(string refreshToken, string? ipAddress, CancellationToken ct = default)
@@ -112,6 +116,6 @@ public class AuthService : IAuthService
     public async Task<UserDto?> GetCurrentUserAsync(Guid userId, CancellationToken ct = default)
     {
         var user = await _db.Users.AsNoTracking().FirstOrDefaultAsync(u => u.Id == userId, ct);
-        return user is null ? null : _mapper.Map<UserDto>(user);
+        return user is null ? null : user.ToDto();
     }
 }

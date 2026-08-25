@@ -2,8 +2,9 @@
 
 یک پیام‌رسان **Production-Ready، سریع، امن، PWA** که کاملاً با اکوسیستم .NET ساخته شده است. الهام‌گرفته از تجربه کاربری WhatsApp ولی بدون کپی‌برداری از کد، لوگو یا طراحی اختصاصی آن.
 
-> **Stack:** .NET 9 ASP.NET Core • Blazor Web App (Interactive Server) • EF Core • SQLite • SignalR • JWT • PWA
+> **Stack:** .NET 10 (LTS) • ASP.NET Core 10 • Blazor Web App (Interactive Server) • EF Core 10 • SQLite • SignalR • JWT • PWA
 > **بدون Node.js** — اجرای کامل پروژه فقط با `dotnet` SDK.
+> **بدون AutoMapper** — به دلیل تغییر لایسنس، از مپرهای دستی (extension methods) استفاده شده است.
 
 ## 📐 معماری
 
@@ -78,7 +79,7 @@
 ## 🚀 نصب و اجرا
 
 ### پیش‌نیازها
-- .NET 9 SDK ([dot.net](https://dot.net))
+- .NET 10 SDK ([dot.net](https://dot.net)) — نسخه LTS منتشرشده در November 2025
 - SQLite (به‌صورت خودکار با EF Core ساخته می‌شود)
 
 ### اجرای Development

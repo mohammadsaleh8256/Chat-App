@@ -4,7 +4,6 @@ using System.Threading.RateLimiting;
 using ChatApp.Application.Interfaces;
 using ChatApp.Infrastructure.Authentication;
 using ChatApp.Infrastructure.Identity;
-using ChatApp.Infrastructure.Mapping;
 using ChatApp.Infrastructure.Persistence;
 using ChatApp.Infrastructure.Services;
 using ChatApp.Infrastructure.SignalR;
@@ -12,6 +11,7 @@ using ChatApp.Infrastructure.Storage;
 using ChatApp.Web.Components;
 using ChatApp.Web.Services;
 using Microsoft.AspNetCore.Authentication.JwtBearer;
+using Microsoft.AspNetCore.Components;
 using Microsoft.AspNetCore.Components.Authorization;
 using Microsoft.AspNetCore.ResponseCompression;
 using Microsoft.EntityFrameworkCore;
@@ -48,9 +48,6 @@ builder.Services.AddDbContext<ChatAppDbContext>(opt =>
 
 builder.Services.AddScoped<IUnitOfWork, UnitOfWork>();
 
-// ===== AutoMapper =====
-builder.Services.AddAutoMapper(typeof(MappingProfile));
-
 // ===== Application services =====
 builder.Services.AddScoped<IAuthService, AuthService>();
 builder.Services.AddScoped<IUserService, UserService>();
@@ -67,9 +64,17 @@ builder.Services.AddScoped<ICurrentUserService, CurrentUserService>();
 builder.Services.AddSingleton<IFileStorage, LocalFileStorage>();
 
 // ===== JWT =====
-var jwtSecret = builder.Configuration["Jwt:Secret"]
-    ?? "ChatAppSuperSecretKeyForJwtSigningChangeMeInProduction_Min32Chars!";
-builder.Configuration["Jwt:Secret"] = jwtSecret;
+var jwtSecret = builder.Configuration["Jwt:Secret"];
+if (string.IsNullOrWhiteSpace(jwtSecret))
+{
+    if (builder.Environment.IsProduction())
+        throw new InvalidOperationException("Jwt:Secret must be configured in Production. Set it via env CHATAPP_Jwt__Secret or appsettings.Production.json.");
+    // Dev-only fallback so `dotnet run` works out-of-the-box
+    jwtSecret = "ChatAppDevOnlySecretKey_NotForProduction_Use_64_Chars_Or_More!!!";
+    builder.Configuration["Jwt:Secret"] = jwtSecret;
+}
+if (jwtSecret.Length < 32)
+    throw new InvalidOperationException("Jwt:Secret must be at least 32 characters long for HMAC-SHA256.");
 
 JwtSecurityTokenHandler.DefaultInboundClaimTypeMap.Clear();
 builder.Services.AddAuthentication(options =>
@@ -131,10 +136,17 @@ builder.Services.AddScoped<IJwtTokenStore, JwtTokenStore>();
 builder.Services.AddScoped<ChatApp.Web.Services.IAppToastService, AppToastService>();
 builder.Services.AddScoped<ChatApp.Web.Services.IFileUploadService, FileUploadService>();
 builder.Services.AddScoped<ChatApp.Web.Services.IChatHubClient, ChatHubClient>();
+builder.Services.AddScoped<ChatApp.Web.Services.HttpJwtHandler>();
 
-builder.Services.AddHttpClient("ChatAppApi", client =>
-{
-    client.BaseAddress = new Uri(builder.Configuration["Api:BaseUrl"] ?? "/api/");
+// HttpClient for Blazor components - all calls go through same-origin /api
+builder.Services.AddScoped(sp => {
+    var handler = sp.GetRequiredService<HttpJwtHandler>();
+    var nav = sp.GetRequiredService<NavigationManager>();
+    var client = new HttpClient(handler)
+    {
+        BaseAddress = new Uri(nav.BaseUri)
+    };
+    return client;
 });
 
 // ===== SignalR =====

@@ -47,6 +47,9 @@ public class AdminController : ControllerBase
     [HttpPut("users/{id:guid}/role")]
     public async Task<IActionResult> ChangeRole(Guid id, [FromBody] UpdateUserRoleRequest req, CancellationToken ct)
     {
+        // Prevent self-demotion / self-lockout: admin cannot change own role.
+        if (id == AdminId())
+            return BadRequest(new { Error = "نمی‌توانید نقش خودتان را تغییر دهید." });
         var dto = await _admin.ChangeUserRoleAsync(AdminId(), id, req.Role, Ip(), ct);
         return Ok(dto);
     }
@@ -54,6 +57,9 @@ public class AdminController : ControllerBase
     [HttpPut("users/{id:guid}/status")]
     public async Task<IActionResult> ChangeStatus(Guid id, [FromBody] UpdateUserStatusRequest req, CancellationToken ct)
     {
+        // Prevent self-disable
+        if (id == AdminId())
+            return BadRequest(new { Error = "نمی‌توانید حساب خودتان را غیرفعال کنید." });
         var dto = await _admin.ChangeUserStatusAsync(AdminId(), id, req.Status, Ip(), ct);
         return Ok(dto);
     }

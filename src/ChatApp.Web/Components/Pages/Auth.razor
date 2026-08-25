@@ -103,6 +103,7 @@
         Error = null;
         try
         {
+            AuthResponse? auth = null;
             if (Mode == "login")
             {
                 var req = new LoginRequest(Form.PhoneNumber, Form.Password);
@@ -112,8 +113,7 @@
                     await ExtractErrorAsync(resp, m => Error = m);
                     return;
                 }
-                var auth = await resp.Content.ReadFromJsonAsync<AuthResponse>();
-                await Tokens.SetTokensAsync(auth!.AccessToken, auth!.RefreshToken);
+                auth = await resp.Content.ReadFromJsonAsync<AuthResponse>();
             }
             else
             {
@@ -124,12 +124,17 @@
                     await ExtractErrorAsync(resp, m => Error = m);
                     return;
                 }
-                var auth = await resp.Content.ReadFromJsonAsync<AuthResponse>();
-                await Tokens.SetTokensAsync(auth!.AccessToken, auth!.RefreshToken);
+                auth = await resp.Content.ReadFromJsonAsync<AuthResponse>();
             }
-            Nav.NavigateTo("/app", forceLoad: true);
+
+            if (auth is not null)
+            {
+                await Tokens.SetTokensAsync(auth.AccessToken, auth.RefreshToken);
+                // forceLoad ensures the AuthStateProvider reads the new token correctly during prerender
+                Nav.NavigateTo("/app", forceLoad: true);
+            }
         }
-        catch (Exception ex)
+        catch
         {
             Error = "خطا در ارتباط با سرور. لطفاً دوباره تلاش کنید.";
         }

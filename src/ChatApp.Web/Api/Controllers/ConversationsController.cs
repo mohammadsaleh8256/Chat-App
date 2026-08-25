@@ -71,7 +71,15 @@ public class ConversationsController : ControllerBase
     [HttpPost("{id:guid}/messages")]
     public async Task<IActionResult> SendMessage(Guid id, [FromBody] SendMessageRequest req, CancellationToken ct)
     {
-        var dto = await _messages.SendTextAsync(UserId(), id, req.Content, req.ReplyToMessageId, ct);
-        return Ok(dto);
+        if (req.AttachmentId.HasValue && req.AttachmentId.Value != Guid.Empty)
+        {
+            var dto = await _messages.SendWithAttachmentAsync(UserId(), id, req.Content, req.AttachmentId.Value, req.MessageType, req.ReplyToMessageId, ct);
+            return Ok(dto);
+        }
+        else
+        {
+            var dto = await _messages.SendTextAsync(UserId(), id, req.Content, req.ReplyToMessageId, ct);
+            return Ok(dto);
+        }
     }
 }

@@ -8,14 +8,15 @@ namespace ChatApp.Infrastructure.Services;
 public class PresenceService : IPresenceService
 {
     private readonly ChatAppDbContext _db;
-    private static readonly ConcurrentDictionary<Guid, ConcurrentBag<string>> _connections = new();
+    // Maps userId -> set of connectionIds (HashSet-equivalent: ConcurrentDictionary<string, byte>)
+    private static readonly ConcurrentDictionary<Guid, ConcurrentDictionary<string, byte>> _connections = new();
 
     public PresenceService(ChatAppDbContext db) => _db = db;
 
     public async Task UserConnectedAsync(Guid userId, string connectionId, CancellationToken ct = default)
     {
-        var conns = _connections.GetOrAdd(userId, _ => new ConcurrentBag<string>());
-        conns.Add(connectionId);
+        var conns = _connections.GetOrAdd(userId, _ => new ConcurrentDictionary<string, byte>());
+        conns.TryAdd(connectionId, 0);
 
         var user = await _db.Users.FindAsync(new object[] { userId }, ct);
         if (user is not null)
@@ -30,17 +31,18 @@ public class PresenceService : IPresenceService
     {
         if (_connections.TryGetValue(userId, out var conns))
         {
-            // ConcurrentBag doesn't support removal easily, so we recreate
-            var remaining = conns.Where(c => c != connectionId).ToList();
-            while (!_connections.TryUpdate(userId, new ConcurrentBag<string>(remaining), conns))
-            {
-                conns = _connections.GetOrAdd(userId, _ => new ConcurrentBag<string>());
-                remaining = conns.Where(c => c != connectionId).ToList();
-            }
+            conns.TryRemove(connectionId, out _);
 
-            if (remaining.Count == 0)
+            if (conns.IsEmpty)
             {
-                _connections.TryRemove(userId, out _);
+                // Try to remove the user entry; if another connection was added in the meantime, leave it
+                _connections.TryRemove(new KeyValuePair<Guid, ConcurrentDictionary<string, byte>>(userId, conns));
+                // Re-check after remove (in case TryUpdate failed because of concurrent addition)
+                if (_connections.TryGetValue(userId, out var stillThere) && !stillThere.IsEmpty)
+                {
+                    return;  // still has connections
+                }
+
                 var user = await _db.Users.FindAsync(new object[] { userId }, ct);
                 if (user is not null)
                 {
@@ -59,7 +61,10 @@ public class PresenceService : IPresenceService
 
     public Task<IReadOnlyList<Guid>> GetOnlineUserIdsAsync(CancellationToken ct = default)
     {
-        IReadOnlyList<Guid> result = _connections.Keys.Where(k => !_connections[k].IsEmpty).ToList();
+        IReadOnlyList<Guid> result = _connections
+            .Where(kv => !kv.Value.IsEmpty)
+            .Select(kv => kv.Key)
+            .ToList();
         return Task.FromResult(result);
     }
 

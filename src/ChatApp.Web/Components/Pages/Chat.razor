@@ -4,6 +4,7 @@
 @inject NavigationManager Nav
 @inject AuthenticationStateProvider AuthState
 @inject IChatHubClient Hub
+@inject IJwtTokenStore Tokens
 @inject IAppToastService Toast
 @implements IDisposable
 
@@ -16,15 +17,12 @@
                         <UserAvatar Url="@CurrentUser?.AvatarUrl" Name="@CurrentUser?.FullName" Size="40" />
                         <div class="user-name">
                             <span class="name">@CurrentUser?.FullName</span>
-                            <span class="phone">@(CurrentUser?.PhoneNumber ?? "")</span>
+                            <span class="phone">@FormatPhone(CurrentUser?.PhoneNumber)</span>
                         </div>
                     </div>
                     <div class="header-actions">
                         <a href="/app/new" class="icon-btn" title="گفتگوی جدید">
                             <svg width="24" height="24" viewBox="0 0 24 24"><path fill="currentColor" d="M19 3H5a2 2 0 0 0-2 2v14l2-1h14a2 2 0 0 0 2-2V5a2 2 0 0 0-2-2zM7 12h10v2H7zm0-4h10v2H7z"/></svg>
-                        </a>
-                        <a href="/settings" class="icon-btn" title="تنظیمات">
-                            <svg width="24" height="24" viewBox="0 0 24 24"><path fill="currentColor" d="M19.1 12.9c0-.3.1-.6.1-.9s0-.6-.1-.9l2-1.6c.2-.2.2-.4.1-.6l-1.9-3.3c-.1-.2-.4-.3-.6-.2l-2.4.9c-.5-.4-1-.7-1.5-.9l-.4-2.5c-.1-.3-.3-.4-.5-.4h-3.8c-.3 0-.5.2-.5.4l-.4 2.5c-.5.2-1 .5-1.5.9L4.4 5.5c-.2-.1-.5 0-.6.2L1.9 9c-.1.2-.1.4.1.6l2 1.6c0 .3-.1.6-.1.9s0 .6.1.9l-2 1.6c-.2.2-.2.4-.1.6l1.9 3.3c.1.2.4.3.6.2l2.4-.9c.5.4 1 .7 1.5.9l.4 2.5c.1.3.3.4.5.4h3.8c.3 0 .5-.2.5-.4l.4-2.5c.5-.2 1-.5 1.5-.9l2.4.9c.2.1.5 0 .6-.2l1.9-3.3c.1-.2.1-.4-.1-.6l-2-1.6zM12 15.5a3.5 3.5 0 1 1 0-7 3.5 3.5 0 0 1 0 7z"/></svg>
                         </a>
                         @if (IsAdmin)
                         {
@@ -38,9 +36,9 @@
                     </div>
                 </div>
                 <div class="search-bar">
-                    <input type="search" value="@SearchQuery" @oninput="@(e => { SearchQuery = e.Value?.ToString() ?? ""; _ = SearchAsync(); })" placeholder="جستجوی گفتگوها..." />
+                    <input type="search" value="@SearchQuery" @oninput="OnSearchInput" placeholder="جستجوی گفتگوها..." />
                 </div>
-                <ConversationList Conversations="@Conversations" Loading="@LoadingConversations" SelectedId="@SelectedConversationId" OnSelect="@SelectConversationAsync" />
+                <ConversationList Conversations="@FilteredConversations" Loading="@LoadingConversations" SelectedId="@SelectedConversationId" OnSelect="@SelectConversationAsync" />
             </aside>
             <main class="chat-main">
                 @if (SelectedConversation is not null)
@@ -78,6 +76,7 @@
     private ConversationDto? SelectedConversation;
     private bool ShowConversation;
     private System.Threading.Timer? _refreshTimer;
+    private bool _initialized;
 
     protected override async Task OnInitializedAsync()
     {
@@ -98,27 +97,25 @@
         IsAdmin = string.Equals(CurrentUser.Role, "admin", StringComparison.OrdinalIgnoreCase);
 
         await LoadConversationsAsync();
-        await Hub.StartAsync();
+
+        // Start SignalR — wait for it but don't block UI on errors
+        _ = Task.Run(async () =>
+        {
+            try { await Hub.StartAsync(); }
+            catch (Exception ex) { Console.Error.WriteLine($"Hub start failed: {ex.Message}"); }
+        });
 
         Hub.OnMessage += OnHubMessageAsync;
         Hub.OnUserOnline += OnUserOnlineAsync;
         Hub.OnUserOffline += OnUserOfflineAsync;
-        Hub.OnMessageDelivered += OnMessageDeliveredAsync;
-        Hub.OnMessageRead += OnMessageReadAsync;
 
-        // Refresh conversations every 15s for last message updates
-        _refreshTimer = new System.Threading.Timer(async _ =>
-        {
-            try { await LoadConversationsAsync(); } catch { }
-        }, null, TimeSpan.FromSeconds(15), TimeSpan.FromSeconds(15));
+        _refreshTimer = new System.Threading.Timer(_ => _ = RefreshAsync(), null, TimeSpan.FromSeconds(30), TimeSpan.FromSeconds(30));
+        _initialized = true;
     }
 
     private async Task LoadCurrentUserAsync()
     {
-        try
-        {
-            CurrentUser = await Http.GetFromJsonAsync<UserDto>("/api/users/me");
-        }
+        try { CurrentUser = await Http.GetFromJsonAsync<UserDto>("/api/users/me"); }
         catch { }
     }
 
@@ -128,12 +125,8 @@
         {
             var list = await Http.GetFromJsonAsync<List<ConversationDto>>("/api/conversations") ?? new();
             Conversations = list;
-            FilteredConversations = string.IsNullOrWhiteSpace(SearchQuery)
-                ? list
-                : list.Where(c => (c.OtherParticipant?.FullName?.Contains(SearchQuery, StringComparison.OrdinalIgnoreCase) ?? false)
-                              || (c.LastMessagePreview?.Contains(SearchQuery, StringComparison.OrdinalIgnoreCase) ?? false)).ToList();
+            ApplyFilter();
             LoadingConversations = false;
-            StateHasChanged();
         }
         catch
         {
@@ -141,9 +134,38 @@
         }
     }
 
+    private void ApplyFilter()
+    {
+        FilteredConversations = string.IsNullOrWhiteSpace(SearchQuery)
+            ? Conversations
+            : Conversations.Where(c =>
+                (c.OtherParticipant?.FullName?.Contains(SearchQuery, StringComparison.OrdinalIgnoreCase) ?? false)
+                || (c.LastMessagePreview?.Contains(SearchQuery, StringComparison.OrdinalIgnoreCase) ?? false)
+            ).ToList();
+    }
+
+    private void OnSearchInput(ChangeEventArgs e)
+    {
+        SearchQuery = e.Value?.ToString() ?? "";
+        ApplyFilter();
+    }
+
     private async Task SearchAsync()
     {
         await LoadConversationsAsync();
+    }
+
+    private async Task RefreshAsync()
+    {
+        try
+        {
+            await InvokeAsync(async () =>
+            {
+                await LoadConversationsAsync();
+                StateHasChanged();
+            });
+        }
+        catch { }
     }
 
     private async Task SelectConversationAsync(ConversationDto conv)
@@ -151,68 +173,67 @@
         SelectedConversation = conv;
         SelectedConversationId = conv.Id;
         ShowConversation = true;
-        await Hub.JoinConversationAsync(conv.Id);
-        await Http.PostAsync($"/api/conversations/{conv.Id}/read", null);
-        StateHasChanged();
+        _ = Hub.JoinConversationAsync(conv.Id);
+        try { await Http.PostAsync($"/api/conversations/{conv.Id}/read", null); }
+        catch { }
     }
 
     private async Task OnHubMessageAsync(HubMessage msg)
     {
         await InvokeAsync(async () =>
         {
-            // Refresh conversation list (last message preview)
             await LoadConversationsAsync();
             StateHasChanged();
         });
     }
 
-    private async Task OnUserOnlineAsync(Guid userId)
-    {
-        await InvokeAsync(() =>
+    private Task OnUserOnlineAsync(Guid userId) =>
+        InvokeAsync(() =>
         {
             var conv = Conversations.FirstOrDefault(c => c.OtherParticipant?.Id == userId);
             if (conv?.OtherParticipant is not null) conv.OtherParticipant.IsOnline = true;
             StateHasChanged();
+            return Task.CompletedTask;
         });
-    }
 
-    private async Task OnUserOfflineAsync(Guid userId)
-    {
-        await InvokeAsync(() =>
+    private Task OnUserOfflineAsync(Guid userId) =>
+        InvokeAsync(() =>
         {
             var conv = Conversations.FirstOrDefault(c => c.OtherParticipant?.Id == userId);
             if (conv?.OtherParticipant is not null) conv.OtherParticipant.IsOnline = false;
             StateHasChanged();
+            return Task.CompletedTask;
         });
-    }
-
-    private async Task OnMessageDeliveredAsync(DeliveryPayload p)
-    {
-        await Task.CompletedTask;
-        // The chat window component will handle this through its own state
-    }
-
-    private async Task OnMessageReadAsync(ReadPayload p)
-    {
-        await Task.CompletedTask;
-    }
 
     private async Task LogoutAsync()
     {
-        var token = await (Tokens as IJwtTokenStore)!.GetRefreshTokenAsync();
-        if (!string.IsNullOrEmpty(token))
+        try
         {
-            try { await Http.PostAsJsonAsync("/api/auth/logout", token); } catch { }
+            var token = await Tokens.GetRefreshTokenAsync();
+            if (!string.IsNullOrEmpty(token))
+            {
+                await Http.PostAsJsonAsync("/api/auth/logout", token);
+            }
+            await Tokens.ClearAsync();
         }
-        await (Tokens as IJwtTokenStore)!.ClearAsync();
+        catch { }
         Nav.NavigateTo("/login", forceLoad: true);
     }
 
-    [Inject] private IJwtTokenStore Tokens { get; set; } = null!;
+    private static string FormatPhone(string? phone)
+    {
+        if (string.IsNullOrEmpty(phone)) return "";
+        if (phone.StartsWith("+98")) return "0" + phone[3..];
+        if (phone.StartsWith("98")) return "0" + phone[2..];
+        return phone;
+    }
 
     public void Dispose()
     {
         _refreshTimer?.Dispose();
+        Hub.OnMessage -= OnHubMessageAsync;
+        Hub.OnUserOnline -= OnUserOnlineAsync;
+        Hub.OnUserOffline -= OnUserOfflineAsync;
         _ = Hub.StopAsync();
     }
 }

@@ -38,6 +38,8 @@ public class ChatAppDbContext : DbContext
         u.Property(x => x.Bio).HasMaxLength(500);
         u.Property(x => x.SecurityStamp).HasMaxLength(64).IsRequired();
         u.Property(x => x.ConcurrencyStamp).HasMaxLength(64);
+        // FullName is computed — never persisted
+        u.Ignore(x => x.FullName);
         u.HasIndex(x => x.NormalizedPhoneNumber).IsUnique();
         u.HasIndex(x => x.PhoneNumberHash).IsUnique();
         u.HasIndex(x => x.PhoneNumber);
@@ -143,6 +145,8 @@ public class ChatAppDbContext : DbContext
         rt.Property(x => x.CreatedByIp).HasMaxLength(64);
         rt.Property(x => x.RevokeByIp).HasMaxLength(64);
         rt.Property(x => x.ReasonRevoked).HasMaxLength(500);
+        // IsActive is computed — never persisted
+        rt.Ignore(x => x.IsActive);
         rt.HasIndex(x => x.TokenHash).IsUnique();
         rt.HasIndex(x => x.UserId);
 

@@ -1,6 +1,6 @@
-using AutoMapper;
 using ChatApp.Application.Interfaces;
 using ChatApp.Contracts.Dtos;
+using ChatApp.Infrastructure.Mapping;
 using ChatApp.Domain.Entities;
 using ChatApp.Domain.Enums;
 using ChatApp.Domain.Exceptions;
@@ -13,15 +13,8 @@ namespace ChatApp.Infrastructure.Services;
 public class AdminService : IAdminService
 {
     private readonly ChatAppDbContext _db;
-    private readonly IMapper _mapper;
-    private readonly IFileStorage _storage;
 
-    public AdminService(ChatAppDbContext db, IMapper mapper, IFileStorage storage)
-    {
-        _db = db;
-        _mapper = mapper;
-        _storage = storage;
-    }
+    public AdminService(ChatAppDbContext db, IFileStorage storage) => _db = db;
 
     public async Task<DashboardStatsDto> GetDashboardStatsAsync(CancellationToken ct = default)
     {
@@ -33,14 +26,11 @@ public class AdminService : IAdminService
         var totalAdmins = await _db.Users.AsNoTracking().CountAsync(u => u.Role == UserRole.Admin && u.DeletedAt == null, ct);
         var disabledUsers = await _db.Users.AsNoTracking().CountAsync(u => u.Status == UserStatus.Disabled && u.DeletedAt == null, ct);
         var activeUploads = await _db.FileUploads.AsNoTracking().CountAsync(f => f.Status == UploadStatus.Uploading || f.Status == UploadStatus.Pending, ct);
-
-        long totalSize = 0;
         var sizes = await _db.FileUploads.AsNoTracking().Where(f => f.Status == UploadStatus.Completed).Select(f => f.Size).ToListAsync(ct);
-        totalSize = sizes.Sum();
 
         return new DashboardStatsDto(
             totalUsers, onlineUsers, totalConversations, totalMessages,
-            totalAttachments, totalSize, totalAdmins, disabledUsers, activeUploads);
+            totalAttachments, sizes.Sum(), totalAdmins, disabledUsers, activeUploads);
     }
 
     public async Task<IReadOnlyList<UserDto>> ListUsersAsync(string? search, string? phone, int page, int pageSize, CancellationToken ct = default)
@@ -51,25 +41,24 @@ public class AdminService : IAdminService
         if (!string.IsNullOrWhiteSpace(search))
         {
             var s = search.Trim();
-            q = q.Where(u => u.FirstName.Contains(s) || u.LastName.Contains(s) || u.FullName.Contains(s));
+            q = q.Where(u => EF.Functions.Like(u.FirstName, $"%{s}%") || EF.Functions.Like(u.LastName, $"%{s}%"));
         }
         if (!string.IsNullOrWhiteSpace(phone))
         {
             var p = phone.Trim();
-            // Try normalize
             if (PhoneNumber.TryParse(p, out var pn))
                 q = q.Where(u => u.NormalizedPhoneNumber == pn.E164);
             else
-                q = q.Where(u => u.PhoneNumber.Contains(p));
+                q = q.Where(u => EF.Functions.Like(u.PhoneNumber, $"%{p}%"));
         }
         var users = await q.OrderByDescending(u => u.CreatedAt).Skip((page - 1) * pageSize).Take(pageSize).ToListAsync(ct);
-        return _mapper.Map<List<UserDto>>(users);
+        return users.Select(u => u.ToDto()).ToList();
     }
 
     public async Task<UserDto?> GetUserAsync(Guid id, CancellationToken ct = default)
     {
         var user = await _db.Users.AsNoTracking().FirstOrDefaultAsync(u => u.Id == id, ct);
-        return user is null ? null : _mapper.Map<UserDto>(user);
+        return user is null ? null : user.ToDto();
     }
 
     public async Task<UserDto> ChangeUserRoleAsync(Guid adminId, Guid userId, string role, string? ipAddress, CancellationToken ct = default)
@@ -91,7 +80,7 @@ public class AdminService : IAdminService
             CreatedAt = DateTime.UtcNow
         });
         await _db.SaveChangesAsync(ct);
-        return _mapper.Map<UserDto>(user);
+        return user.ToDto();
     }
 
     public async Task<UserDto> ChangeUserStatusAsync(Guid adminId, Guid userId, string status, string? ipAddress, CancellationToken ct = default)
@@ -113,7 +102,7 @@ public class AdminService : IAdminService
             CreatedAt = DateTime.UtcNow
         });
         await _db.SaveChangesAsync(ct);
-        return _mapper.Map<UserDto>(user);
+        return user.ToDto();
     }
 
     public async Task<IReadOnlyList<ConversationDto>> ListUserConversationsAsync(Guid adminId, Guid userId, string? ipAddress, int page, int pageSize, CancellationToken ct = default)
@@ -131,16 +120,13 @@ public class AdminService : IAdminService
         var result = new List<ConversationDto>();
         foreach (var c in conversations)
         {
-            var dto = _mapper.Map<ConversationDto>(c);
-            var others = await (
+            var other = await (
                 from p in _db.ConversationParticipants.AsNoTracking()
                 join u in _db.Users.AsNoTracking() on p.UserId equals u.Id
                 where p.ConversationId == c.Id && p.UserId != userId
                 select u
             ).FirstOrDefaultAsync(ct);
-            dto.OtherParticipant = others is not null ? _mapper.Map<UserSummaryDto>(others) : null;
-            dto.UnreadCount = 0;
-            result.Add(dto);
+            result.Add(c.ToDto(other, 0));
         }
 
         _db.AuditLogs.Add(new AuditLog
@@ -161,17 +147,33 @@ public class AdminService : IAdminService
         page = Math.Max(1, page);
         pageSize = Math.Clamp(pageSize, 1, 200);
 
-        var conv = await _db.Conversations.AsNoTracking().FirstOrDefaultAsync(c => c.Id == conversationId, ct);
-        if (conv is null) return Array.Empty<MessageDto>();
-
-        var msgs = await _db.Messages.AsNoTracking()
+        var msgIds = await _db.Messages.AsNoTracking()
             .Where(m => m.ConversationId == conversationId && m.DeletedAt == null)
             .OrderByDescending(m => m.CreatedAt)
             .Skip((page - 1) * pageSize).Take(pageSize)
+            .Select(m => m.Id)
             .ToListAsync(ct);
 
-        var senders = await _db.Users.AsNoTracking().Where(u => msgs.Select(m => m.SenderId).Distinct().Contains(u.Id)).ToDictionaryAsync(u => u.Id, ct);
-        var attachments = await _db.MessageAttachments.AsNoTracking().Where(a => msgs.Select(m => m.Id).Contains(a.MessageId)).ToListAsync(ct);
+        if (msgIds.Count == 0)
+        {
+            // Still write audit log
+            _db.AuditLogs.Add(new AuditLog
+            {
+                AdminId = adminId,
+                Action = AuditAction.ViewConversation,
+                TargetConversationId = conversationId,
+                Details = "Admin viewed conversation messages (empty)",
+                IpAddress = ipAddress,
+                CreatedAt = DateTime.UtcNow
+            });
+            await _db.SaveChangesAsync(ct);
+            return Array.Empty<MessageDto>();
+        }
+
+        var msgs = await _db.Messages.AsNoTracking().Where(m => msgIds.Contains(m.Id)).ToListAsync(ct);
+        var senderIds = msgs.Select(m => m.SenderId).Distinct().ToList();
+        var senders = await _db.Users.AsNoTracking().Where(u => senderIds.Contains(u.Id)).ToDictionaryAsync(u => u.Id, ct);
+        var attachments = await _db.MessageAttachments.AsNoTracking().Where(a => msgIds.Contains(a.MessageId)).ToListAsync(ct);
 
         var result = msgs.Select(m => new MessageDto(
             Id: m.Id,
@@ -190,10 +192,7 @@ public class AdminService : IAdminService
             IsEdited: m.IsEdited,
             DeliveredAt: m.DeliveredAt,
             ReadAt: m.ReadAt,
-            Attachments: attachments.Where(a => a.MessageId == m.Id).Select(a => new AttachmentDto(
-                Id: a.Id, OriginalFileName: a.OriginalFileName, Size: a.Size,
-                ContentType: a.ContentType, Type: a.Type.ToString(),
-                ThumbnailUrl: a.ThumbnailPath, DownloadUrl: $"/api/files/{a.Id}")).ToList()
+            Attachments: attachments.Where(a => a.MessageId == m.Id).Select(a => a.ToDto()).ToList()
         )).ToList();
 
         _db.AuditLogs.Add(new AuditLog
@@ -286,13 +285,18 @@ public class AdminService : IAdminService
         pageSize = Math.Clamp(pageSize, 1, 200);
         var q = query.Trim();
 
-        var msgs = await _db.Messages.AsNoTracking()
-            .Where(m => m.DeletedAt == null && m.Content.Contains(q))
+        var msgIds = await _db.Messages.AsNoTracking()
+            .Where(m => m.DeletedAt == null && EF.Functions.Like(m.Content, $"%{q}%"))
             .OrderByDescending(m => m.CreatedAt)
             .Skip((page - 1) * pageSize).Take(pageSize)
+            .Select(m => m.Id)
             .ToListAsync(ct);
 
-        var senders = await _db.Users.AsNoTracking().Where(u => msgs.Select(m => m.SenderId).Distinct().Contains(u.Id)).ToDictionaryAsync(u => u.Id, ct);
+        if (msgIds.Count == 0) return Array.Empty<MessageDto>();
+
+        var msgs = await _db.Messages.AsNoTracking().Where(m => msgIds.Contains(m.Id)).ToListAsync(ct);
+        var senderIds = msgs.Select(m => m.SenderId).Distinct().ToList();
+        var senders = await _db.Users.AsNoTracking().Where(u => senderIds.Contains(u.Id)).ToDictionaryAsync(u => u.Id, ct);
 
         var result = msgs.Select(m => new MessageDto(
             Id: m.Id,

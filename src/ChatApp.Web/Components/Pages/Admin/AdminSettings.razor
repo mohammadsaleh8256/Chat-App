@@ -9,7 +9,9 @@
         <p class="hint">شماره‌ای که در زمان ثبت‌نام، نقش Admin به‌طور خودکار به آن تعلق می‌گیرد.</p>
         <div class="form-row">
             <input type="tel" @bind="AdminPhone" dir="ltr" placeholder="09162744975" />
-            <button class="btn-primary" @onclick="UpdateAdminPhoneAsync" disabled="@Loading">ذخیره</button>
+            <button class="btn-primary" @onclick="UpdateAdminPhoneAsync" disabled="@Loading">
+                @(Loading ? "در حال ذخیره..." : "ذخیره")
+            </button>
         </div>
     </div>
 
@@ -17,8 +19,10 @@
         <h3>جستجوی پیام‌ها</h3>
         <p class="hint">می‌توانید در پیام‌های همه کاربران جستجو کنید (با ثبت در لاگ ممیزی).</p>
         <div class="form-row">
-            <input type="search" @bind="MessageQuery" @oninput="@(() => {})" placeholder="عبارت جستجو..." @onkeypress="OnSearchKeyPress" />
-            <button class="btn-primary" @onclick="SearchMessagesAsync" disabled="@Searching">جستجو</button>
+            <input type="search" @bind="MessageQuery" placeholder="عبارت جستجو..." @onkeypress="OnSearchKeyPress" />
+            <button class="btn-primary" @onclick="SearchMessagesAsync" disabled="@Searching">
+                @(Searching ? "در حال جستجو..." : "جستجو")
+            </button>
         </div>
         @if (MessageResults is not null)
         {
@@ -50,34 +54,44 @@
     {
         try
         {
-            var result = await Http.GetFromJsonAsync<dynamic>("/api/admin/settings/admin-phone");
-            AdminPhone = ((string)result.PhoneNumber).ToDisplayPhone();
+            var result = await Http.GetFromJsonAsync<AdminPhoneResponse>("/api/admin/settings/admin-phone");
+            if (result is not null)
+            {
+                AdminPhone = FormatPhone(result.PhoneNumber);
+            }
         }
         catch { }
     }
 
     private async Task UpdateAdminPhoneAsync()
     {
+        if (string.IsNullOrWhiteSpace(AdminPhone))
+        {
+            await Toast.ShowErrorAsync("شماره تلفن الزامی است.");
+            return;
+        }
         Loading = true;
         try
         {
             var resp = await Http.PutAsJsonAsync("/api/admin/settings/admin-phone", new UpdateAdminPhoneRequest(AdminPhone));
             if (resp.IsSuccessStatusCode)
                 await Toast.ShowSuccessAsync("شماره مدیر به‌روزرسانی شد.");
+            else
+                await Toast.ShowErrorAsync("خطا در به‌روزرسانی.");
         }
-        catch { await Toast.ShowErrorAsync("خطا در به‌روزرسانی."); }
+        catch { await Toast.ShowErrorAsync("خطا در ارتباط با سرور."); }
         Loading = false;
     }
 
     private async Task SearchMessagesAsync()
     {
-        if (string.IsNullOrEmpty(MessageQuery)) return;
+        if (string.IsNullOrWhiteSpace(MessageQuery)) return;
         Searching = true;
         try
         {
             MessageResults = await Http.GetFromJsonAsync<List<MessageDto>>($"/api/admin/messages/search?query={Uri.EscapeDataString(MessageQuery)}&pageSize=100");
         }
-        catch { }
+        catch { await Toast.ShowErrorAsync("خطا در جستجو."); }
         Searching = false;
     }
 
@@ -85,4 +99,14 @@
     {
         if (e.Key == "Enter") await SearchMessagesAsync();
     }
+
+    private static string FormatPhone(string phone)
+    {
+        if (string.IsNullOrEmpty(phone)) return "";
+        if (phone.StartsWith("+98")) return "0" + phone[3..];
+        if (phone.StartsWith("98")) return "0" + phone[2..];
+        return phone;
+    }
+
+    private record AdminPhoneResponse(string PhoneNumber);
 }
