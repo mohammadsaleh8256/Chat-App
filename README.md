@@ -123,15 +123,17 @@ npm install
 cd ../..
 ```
 
-#### 2. تولید Prisma Client برای mini-service
+#### 2. تولید Prisma Client (بسیار مهم)
 
-این مرحله **بسیار مهم** است — بدون آن mini-service خطای `@prisma/client did not initialize yet` می‌دهد:
+این مرحله برای هر دو Next.js و mini-service الزامی است. mini-service از Prisma Client ریشه پروژه استفاده می‌کند (نه یک کپی محلی):
 
 ```bash
-cd mini-services/websocket
-npx prisma generate --schema ../../prisma/schema.prisma
-cd ../..
+# در ریشه پروژه:
+npx prisma generate
+# یا: bunx prisma generate
 ```
+
+> ⚠️ اگر این مرحله را انجام ندهید، mini-service هنگام اجرا خطای `@prisma/client did not initialize yet` می‌دهد.
 
 #### 3. پیکربندی محیط
 
@@ -154,9 +156,6 @@ cp .env.example .env
 ```bash
 # اعمال schema به SQLite
 bun run db:push      # یا: npx prisma db push --accept-data-loss
-
-# تولید Prisma Client اصلی (برای Next.js)
-bun run db:generate  # یا: npx prisma generate
 
 # ایجاد ادمین اولیه از env vars
 bun scripts/seed.js  # یا: node scripts/seed.js
@@ -275,20 +274,38 @@ MIT — این پروژه نمونه است و هیچ وابستگی تجاری 
 
 ### 1. خطای `@prisma/client did not initialize yet`
 
-**علت:** Prisma Client برای mini-service تولید نشده است. هر کدام از Next.js و mini-service به Prisma Client خودشان نیاز دارند.
+**علت اصلی:** Prisma Client در ریشه پروژه (`Chat-App/node_modules/.prisma/client/`) تولید نشده است. mini-service از Prisma Client ریشه پروژه استفاده می‌کند (نه یک کپی محلی).
 
-**راه‌حل:**
+**راه‌حل نهایی:**
 ```bash
-cd mini-services/websocket
-npx prisma generate --schema ../../prisma/schema.prisma
+# در ریشه پروژه (نه mini-service):
+cd C:\Users\MS\Documents\MyProjects\Chat-App
+
+# تولید Prisma Client
+npx prisma generate
+# یا: bunx prisma generate
+
+# حالا mini-service را اجرا کنید:
+cd mini-services\websocket
+npm run dev
 ```
 
-اگر باز هم خطا داد:
+**چرا این مشکل پیش می‌آید؟**
+- mini-service یک stub `@prisma/client` در `node_modules` خودش دارد که فقط برای TypeScript types است.
+- در runtime، mini-service به‌جای stub محلی، Prisma Client واقعی را از `../../node_modules/@prisma/client` (ریشه پروژه) load می‌کند.
+- اگر Prisma Client ریشه تولید نشده باشد، خطا می‌دهد.
+
+**بررسی اینکه آیا کلاینت ریشه تولید شده:**
 ```bash
-# حذف node_modules و نصب مجدد
-rm -rf node_modules          # Windows: rmdir /s /q node_modules
-npm install                  # یا: bun install
-npx prisma generate --schema ../../prisma/schema.prisma
+# در ریشه پروژه:
+dir node_modules\.prisma\client\index.js
+# اگر فایل index.js وجود داشت و حجمش >10KB بود، کلاینت تولید شده.
+```
+
+**اسکریپت `check-prisma` به‌طور خودکار این را قبل از اجرای dev بررسی می‌کند:**
+```bash
+cd mini-services\websocket
+npm run check-prisma
 ```
 
 ### 2. خطای `bun: command not found` یا `bun --hot` کار نمی‌کند
@@ -427,7 +444,6 @@ taskkill /PID <PID> /F
 - [ ] `curl http://localhost:3000` پاسخ می‌دهد
 - [ ] `curl http://localhost:3003/health` پاسخ می‌دهد
 - [ ] دیتابیس ساخته شده: `bun run db:push` اجرا شده
-- [ ] Prisma Client تولید شده: `bun run db:generate`
-- [ ] mini-service Prisma Client تولید شده: `cd mini-services/websocket && npx prisma generate --schema ../../prisma/schema.prisma`
+- [ ] Prisma Client تولید شده در ریشه: `npx prisma generate` (در ریشه پروژه، نه mini-service)
 - [ ] ادمین seed شده: `bun scripts/seed.js` اجرا شده
 
