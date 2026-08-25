@@ -1,2 +1,86 @@
-skills/
-node_modules/
+# dependencies
+node_modules
+/.pnp
+.pnp.*
+.yarn/*
+!.yarn/patches
+!.yarn/plugins
+!.yarn/releases
+!.yarn/versions
+
+# testing
+/coverage
+
+# next.js
+/.next/
+/out/
+
+# production
+/build
+
+# misc
+.DS_Store
+*.pem
+
+# debug
+npm-debug.log*
+yarn-debug.log*
+yarn-error.log*
+.pnpm-debug.log*
+
+# env files (NEVER commit secrets)
+.env
+.env.local
+.env.production
+.env.development
+*.env
+
+# vercel
+.vercel
+
+# typescript
+*.tsbuildinfo
+next-env.d.ts
+local-*
+
+# logs
+*.log
+dev.log
+dev.out.log
+server.log
+
+# project internal
+.claude
+.z-ai-config
+.zscripts/
+prompt
+test
+
+# skills directory (internal)
+/skills/
+
+# database files
+db/
+*.db
+*.db-journal
+*.sqlite
+*.sqlite3
+
+# uploaded files (user data)
+storage/
+uploads/
+
+# secrets / credentials
+*.key
+*.pem
+*.p12
+*.pfx
+secrets/
+credentials/
+tokens/
+
+# tool results
+tool-results/
+
+# mini-service logs
+mini-services/*.log
