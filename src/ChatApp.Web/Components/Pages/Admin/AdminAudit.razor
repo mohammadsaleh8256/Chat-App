@@ -1,0 +1,75 @@
+@inject HttpClient Http
+
+<div class="admin-section">
+    <h1>لاگ‌های ممیزی</h1>
+    <div class="filters-bar">
+        <input type="date" value="@(FromDate?.ToString("yyyy-MM-dd"))" @onchange="@(e => { FromDate = DateTime.TryParse(e.Value?.ToString(), out var d) ? d : (DateTime?)null; _ = LoadAsync(); })" />
+        <input type="date" value="@(ToDate?.ToString("yyyy-MM-dd"))" @onchange="@(e => { ToDate = DateTime.TryParse(e.Value?.ToString(), out var d) ? d : (DateTime?)null; _ = LoadAsync(); })" />
+    </div>
+
+    @if (Loading)
+    {
+        <div class="loading"><span class="spinner"></span></div>
+    }
+    else if (Logs.Count == 0)
+    {
+        <div class="empty-state">لاگی وجود ندارد.</div>
+    }
+    else
+    {
+        <div class="admin-table-wrap">
+            <table class="admin-table">
+                <thead>
+                    <tr>
+                        <th>زمان</th>
+                        <th>مدیر</th>
+                        <th>عملیات</th>
+                        <th>هدف</th>
+                        <th>جزئیات</th>
+                        <th>IP</th>
+                    </tr>
+                </thead>
+                <tbody>
+                    @foreach (var log in Logs)
+                    {
+                        <tr>
+                            <td>@log.CreatedAt.ToRelativeTime()</td>
+                            <td>@log.AdminName</td>
+                            <td><span class="action-badge">@log.Action</span></td>
+                            <td>@(log.TargetUserName ?? "-")</td>
+                            <td>@(log.Details ?? "-")</td>
+                            <td dir="ltr">@(log.IpAddress ?? "-")</td>
+                        </tr>
+                    }
+                </tbody>
+            </table>
+        </div>
+    }
+</div>
+
+@code {
+    private List<AuditLogDto> Logs = new();
+    private DateTime? FromDate;
+    private DateTime? ToDate;
+    private bool Loading = true;
+
+    protected override async Task OnInitializedAsync()
+    {
+        await LoadAsync();
+    }
+
+    private async Task LoadAsync()
+    {
+        Loading = true;
+        try
+        {
+            var url = "/api/admin/audit-logs?pageSize=200";
+            if (FromDate.HasValue) url += $"&from={Uri.EscapeDataString(FromDate.Value.ToString("O"))}";
+            if (ToDate.HasValue) url += $"&to={Uri.EscapeDataString(ToDate.Value.ToString("O"))}";
+            Logs = await Http.GetFromJsonAsync<List<AuditLogDto>>(url) ?? new();
+        }
+        catch { }
+        Loading = false;
+        StateHasChanged();
+    }
+}

@@ -1,0 +1,119 @@
+@page "/app/new"
+@rendermode InteractiveServer
+@inject HttpClient Http
+@inject NavigationManager Nav
+@inject AuthenticationStateProvider AuthState
+@inject IAppToastService Toast
+
+<AuthorizeView>
+    <Authorized>
+        <div class="new-chat-page">
+            <div class="new-chat-header">
+                <button class="icon-btn" @onclick="@(() => Nav.NavigateTo("/app"))">
+                    <svg width="24" height="24" viewBox="0 0 24 24"><path fill="currentColor" d="M20 11H7.83l5.59-5.59L12 4l-8 8 8 8 1.41-1.41L7.83 13H20v-2z"/></svg>
+                </button>
+                <h2>گفتگوی جدید</h2>
+            </div>
+            <div class="search-bar">
+                <input type="search" value="@SearchQuery" @oninput="@(e => { SearchQuery = e.Value?.ToString() ?? ""; _ = SearchAsync(); })" placeholder="جستجوی کاربر..." />
+            </div>
+            @if (Searching)
+            {
+                <div class="loading"><span class="spinner"></span></div>
+            }
+            else if (Users.Count == 0)
+            {
+                <div class="empty-state">
+                    <p>کاربری یافت نشد.</p>
+                </div>
+            }
+            else
+            {
+                <div class="users-list">
+                    @foreach (var u in Users)
+                    {
+                        <div class="user-row" @onclick="@(() => StartConversationAsync(u.Id))">
+                            <UserAvatar Url="@u.AvatarUrl" Name="@u.FullName" Size="48" />
+                            <div class="user-info-row">
+                                <span class="name">@u.FullName</span>
+                                <span class="phone">@(u.PhoneNumber?.ToDisplayPhone())</span>
+                            </div>
+                            <div class="status">
+                                <span class="dot @(u.IsOnline ? "online" : "offline")"></span>
+                                @(u.IsOnline ? "آنلاین" : (u.LastSeen.HasValue ? "آخرین بازدید " + u.LastSeen.Value.ToPersianTime() : "آفلاین"))
+                            </div>
+                        </div>
+                    }
+                </div>
+            }
+        </div>
+    </Authorized>
+    <NotAuthorized>
+        <p>در حال انتقال...</p>
+    </NotAuthorized>
+</AuthorizeView>
+
+@code {
+    private List<UserSummaryDto> Users = new();
+    private string SearchQuery = "";
+    private bool Searching = true;
+
+    protected override async Task OnInitializedAsync()
+    {
+        var state = await AuthState.GetAuthenticationStateAsync();
+        if (state.User.Identity?.IsAuthenticated != true)
+        {
+            Nav.NavigateTo("/login", forceLoad: true);
+            return;
+        }
+        await LoadUsersAsync(SearchQuery);
+    }
+
+    private async Task LoadUsersAsync(string search)
+    {
+        Searching = true;
+        try
+        {
+            var url = $"/api/users?pageSize=100";
+            if (!string.IsNullOrEmpty(search)) url += $"&search={Uri.EscapeDataString(search)}";
+            Users = await Http.GetFromJsonAsync<List<UserSummaryDto>>(url) ?? new();
+        }
+        catch { }
+        Searching = false;
+    }
+
+    protected override async Task OnAfterRenderAsync(bool firstRender)
+    {
+        if (firstRender)
+        {
+            // Watch searchQuery changes
+        }
+        await base.OnAfterRenderAsync(firstRender);
+    }
+
+    private async Task SearchAsync()
+    {
+        await LoadUsersAsync(SearchQuery);
+    }
+
+    private async Task StartConversationAsync(Guid userId)
+    {
+        var resp = await Http.PostAsJsonAsync("/api/conversations", new { OtherUserId = userId });
+        if (resp.IsSuccessStatusCode)
+        {
+            var conv = await resp.Content.ReadFromJsonAsync<ConversationDto>();
+            Nav.NavigateTo($"/app?conversationId={conv!.Id}", forceLoad: true);
+        }
+        else
+        {
+            await Toast.ShowErrorAsync("ایجاد گفتگو ناموفق بود.");
+        }
+    }
+}
+
+@functions {
+}
+
+@code {
+    // Provide a helper for showing the phone in display format
+}

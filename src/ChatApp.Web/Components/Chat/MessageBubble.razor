@@ -1,0 +1,66 @@
+@inject IJSRuntime JS
+
+<div class="message-bubble @(IsMine ? "mine" : "") @MessageType">
+    @if (msg.Attachments.Count > 0)
+    {
+        <div class="attachments">
+            @foreach (var a in msg.Attachments)
+            {
+                <div class="attachment" @onclick="@(() => DownloadAttachmentAsync(a))">
+                    @if (a.Type == "Image" && !string.IsNullOrEmpty(a.ThumbnailUrl))
+                    {
+                        <img src="@a.ThumbnailUrl" alt="@a.OriginalFileName" />
+                    }
+                    else
+                    {
+                        <div class="file-icon">
+                            <svg width="32" height="32" viewBox="0 0 24 24"><path fill="currentColor" d="M14 2H6c-1.1 0-2 .9-2 2v16c0 1.1.9 2 2 2h12c1.1 0 2-.9 2-2V8l-6-6zm-1 7V3.5L18.5 9H13z"/></svg>
+                            <span>@a.OriginalFileName</span>
+                            <small>@a.Size.FormatFileSize()</small>
+                        </div>
+                    }
+                </div>
+            }
+        </div>
+    }
+    @if (!string.IsNullOrEmpty(msg.Content))
+    {
+        <div class="message-content">@msg.Content</div>
+    }
+    <div class="message-meta">
+        <span class="time">@msg.CreatedAt.ToRelativeTime()</span>
+        @if (IsMine)
+        {
+            <span class="status @msg.Status.ToLower()">
+                @switch (msg.Status.ToLower())
+                {
+                    case "sending": <svg width="14" height="14" viewBox="0 0 24 24"><path fill="currentColor" d="M11 4h2v8h-2z"/></svg> break;
+                    case "sent": <svg width="16" height="16" viewBox="0 0 24 24"><path fill="currentColor" d="M9 16.17L4.83 12l-1.42 1.41L9 19 21 7l-1.41-1.41z"/></svg> break;
+                    case "delivered": <svg width="16" height="16" viewBox="0 0 24 24"><path fill="currentColor" d="M18 7l-8.59 8.59L6 12.17l-1.41 1.41L9.41 18 19.41 8z"/></svg> break;
+                    case "read": <svg width="16" height="16" viewBox="0 0 24 24" style="color:#34B7F1"><path fill="currentColor" d="M18 7l-8.59 8.59L6 12.17l-1.41 1.41L9.41 18 19.41 8z"/></svg> break;
+                    case "failed": <svg width="16" height="16" viewBox="0 0 24 24"><path fill="currentColor" d="M12 2C6.48 2 2 6.48 2 12s4.48 10 10 10 10-4.48 10-10S17.52 2 12 2zm1 15h-2v-2h2v2zm0-4h-2V7h2v6z"/></svg> break;
+                }
+            </span>
+        }
+    </div>
+</div>
+
+@code {
+    [Parameter] public MessageDto msg { get; set; } = null!;
+    [Parameter] public bool IsMine { get; set; }
+
+    private string MessageType => msg?.Type?.ToLowerInvariant() ?? "text";
+
+    private async Task DownloadAttachmentAsync(AttachmentDto a)
+    {
+        await JS.InvokeVoidAsync("eval", $"window.open('/api/files/{a.Id}', '_blank')");
+    }
+
+    private async Task CopyTextAsync()
+    {
+        if (!string.IsNullOrEmpty(msg.Content))
+        {
+            await JS.InvokeVoidAsync("chatApp.clipboard.copy", msg.Content);
+        }
+    }
+}

@@ -1,0 +1,14 @@
+<Router AppAssembly="typeof(Program).Assembly">
+    <Found Context="routeData">
+        <AuthorizeRouteView RouteData="routeData" DefaultLayout="typeof(Layout.MainLayout)">
+            <NotAuthorized>
+                <p class="redirecting">در حال انتقال به صفحه ورود...</p>
+                <script>setTimeout(() => location.href = '/login', 500);</script>
+            </NotAuthorized>
+            <Authorizing>
+                <p class="redirecting">در حال بارگذاری...</p>
+            </Authorizing>
+        </AuthorizeRouteView>
+        <FocusOnNavigate RouteData="routeData" Selector="h1" />
+    </Found>
+</Router>

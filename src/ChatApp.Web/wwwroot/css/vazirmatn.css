@@ -1,0 +1,10 @@
+/* Vazirmatn font - Persian web font.
+   Loaded from local files; falls back to system fonts.
+*/
+@font-face {
+    font-family: 'Vazirmatn';
+    font-style: normal;
+    font-weight: 100 900;
+    font-display: swap;
+    src: url('/fonts/Vazirmatn[wght].woff2') format('woff2-variations');
+}

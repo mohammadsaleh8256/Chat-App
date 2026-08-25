@@ -1,86 +1,48 @@
-# dependencies
-node_modules
-/.pnp
-.pnp.*
-.yarn/*
-!.yarn/patches
-!.yarn/plugins
-!.yarn/releases
-!.yarn/versions
+# .NET
+**/bin/
+**/obj/
+**/out/
+**/publish/
+*.user
+*.suo
+.vs/
+.idea/
 
-# testing
-/coverage
+# Build artifacts
+*.dll
+*.pdb
+*.exe
+*.cache
 
-# next.js
-/.next/
-/out/
+# Logs
+logs/
+*.log
 
-# production
-/build
+# Database & uploads (development)
+*.db
+*.db-shm
+*.db-wal
+uploads/
+data/
 
-# misc
+# IDE
+*.swp
+*~
 .DS_Store
-*.pem
+Thumbs.db
 
-# debug
-npm-debug.log*
-yarn-debug.log*
-yarn-error.log*
-.pnpm-debug.log*
-
-# env files (NEVER commit secrets)
+# Environment & secrets
 .env
 .env.local
-.env.production
-.env.development
-*.env
+appsettings.Production.json
+appsettings.Local.json
+secrets.json
 
-# vercel
-.vercel
+# Node (legacy, not used)
+node_modules/
+package-lock.json
+bun.lock
 
-# typescript
-*.tsbuildinfo
-next-env.d.ts
-local-*
-
-# logs
-*.log
-dev.log
-dev.out.log
-server.log
-
-# project internal
-.claude
-.z-ai-config
-.zscripts/
-prompt
-test
-
-# skills directory (internal)
-/skills/
-
-# database files
-db/
-*.db
-*.db-journal
-*.sqlite
-*.sqlite3
-
-# uploaded files (user data)
-storage/
-uploads/
-
-# secrets / credentials
-*.key
-*.pem
-*.p12
-*.pfx
-secrets/
-credentials/
-tokens/
-
-# tool results
-tool-results/
-
-# mini-service logs
-mini-services/*.log
+# Misc
+*.tmp
+*.bak

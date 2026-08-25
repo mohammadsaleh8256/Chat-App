@@ -1,0 +1,237 @@
+@inject HttpClient Http
+@inject IAppToastService Toast
+
+<div class="admin-section">
+    <h1>مدیریت کاربران</h1>
+    <div class="filters-bar">
+        <input type="search" value="@SearchQuery" @oninput="@(e => { SearchQuery = e.Value?.ToString() ?? ""; _ = SearchAsync(); })" placeholder="جستجو بر اساس نام..." />
+        <input type="tel" value="@PhoneFilter" @oninput="@(e => { PhoneFilter = e.Value?.ToString() ?? ""; _ = SearchAsync(); })" placeholder="جستجوی شماره تلفن" dir="ltr" />
+    </div>
+
+    @if (Loading)
+    {
+        <div class="loading"><span class="spinner"></span></div>
+    }
+    else if (Users.Count == 0)
+    {
+        <div class="empty-state">کاربری یافت نشد.</div>
+    }
+    else
+    {
+        <div class="admin-table-wrap">
+            <table class="admin-table">
+                <thead>
+                    <tr>
+                        <th>کاربر</th>
+                        <th>شماره</th>
+                        <th>نقش</th>
+                        <th>وضعیت</th>
+                        <th>آخرین بازدید</th>
+                        <th>عملیات</th>
+                    </tr>
+                </thead>
+                <tbody>
+                    @foreach (var u in Users)
+                    {
+                        <tr>
+                            <td>
+                                <div class="user-cell">
+                                    <UserAvatar Url="@u.AvatarUrl" Name="@u.FullName" Size="32" />
+                                    <div>
+                                        <div class="user-name">@u.FullName</div>
+                                        <div class="user-status">@u.PhoneNumber.ToDisplayPhone()</div>
+                                    </div>
+                                </div>
+                            </td>
+                            <td dir="ltr">@u.PhoneNumber</td>
+                            <td>
+                                <span class="role-badge @(u.Role.ToLower())">@u.Role</span>
+                            </td>
+                            <td>
+                                <span class="status-badge @(u.Status.ToLower())">@u.Status</span>
+                            </td>
+                            <td>@(u.LastSeen.HasValue ? u.LastSeen.Value.ToRelativeTime() : "-")</td>
+                            <td>
+                                <button class="btn-small" @onclick="@(() => ViewUserAsync(u))">مشاهده</button>
+                                @if (u.Status == "Active")
+                                {
+                                    <button class="btn-small btn-warning" @onclick="@(() => ChangeStatusAsync(u, "Disabled"))">غیرفعال</button>
+                                }
+                                else if (u.Status == "Disabled")
+                                {
+                                    <button class="btn-small btn-success" @onclick="@(() => ChangeStatusAsync(u, "Active"))">فعال</button>
+                                }
+                                @if (u.Role == "User")
+                                {
+                                    <button class="btn-small btn-primary" @onclick="@(() => ChangeRoleAsync(u, "Admin"))">ادمین</button>
+                                }
+                                else
+                                {
+                                    <button class="btn-small btn-secondary" @onclick="@(() => ChangeRoleAsync(u, "User"))">کاربر</button>
+                                }
+                            </td>
+                        </tr>
+                    }
+                </tbody>
+            </table>
+        </div>
+    }
+
+    @if (SelectedUser is not null)
+    {
+        <div class="modal-backdrop" @onclick="@(() => SelectedUser = null)">
+            <div class="modal" @onclick="@(() => {})">
+                <div class="modal-header">
+                    <h3>جزئیات کاربر</h3>
+                    <button class="btn-close" @onclick="@(() => SelectedUser = null)">✕</button>
+                </div>
+                <div class="modal-body">
+                    <UserAvatar Url="@SelectedUser.AvatarUrl" Name="@SelectedUser.FullName" Size="80" />
+                    <h2>@SelectedUser.FullName</h2>
+                    <p>شماره: <span dir="ltr">@SelectedUser.PhoneNumber</span></p>
+                    <p>نقش: <span class="role-badge @(SelectedUser.Role.ToLower())">@SelectedUser.Role</span></p>
+                    <p>وضعیت: <span class="status-badge @(SelectedUser.Status.ToLower())">@SelectedUser.Status</span></p>
+                    <p>آخرین بازدید: @(SelectedUser.LastSeen.HasValue ? SelectedUser.LastSeen.Value.ToRelativeTime() : "نامشخص")</p>
+                    <p>عضویت از: @SelectedUser.CreatedAt.ToRelativeTime()</p>
+
+                    <h4>گفتگوهای کاربر</h4>
+                    @if (UserConversations is null)
+                    {
+                        <div class="loading"><span class="spinner"></span></div>
+                    }
+                    else if (UserConversations.Count == 0)
+                    {
+                        <p>گفتگویی وجود ندارد.</p>
+                    }
+                    else
+                    {
+                        <div class="conversations-grid">
+                            @foreach (var c in UserConversations)
+                            {
+                                <div class="conversation-card" @onclick="@(() => OpenConversationAsync(c.Id))">
+                                    <UserAvatar Url="@c.OtherParticipant?.AvatarUrl" Name="@c.OtherParticipant?.FullName" Size="40" />
+                                    <div>
+                                        <div>@(c.OtherParticipant?.FullName ?? "نامشخص")</div>
+                                        <small>@(c.LastMessagePreview ?? "بدون پیام")</small>
+                                    </div>
+                                </div>
+                            }
+                        </div>
+                    }
+                </div>
+            </div>
+        </div>
+    }
+
+    @if (ViewingConversation is not null)
+    {
+        <div class="modal-backdrop" @onclick="@(() => ViewingConversation = null)">
+            <div class="modal large" @onclick="@(() => {})">
+                <div class="modal-header">
+                    <h3>پیام‌های گفتگو</h3>
+                    <button class="btn-close" @onclick="@(() => ViewingConversation = null)">✕</button>
+                </div>
+                <div class="modal-body">
+                    <div class="messages-viewer">
+                        @if (ConversationMessages is null)
+                        {
+                            <div class="loading"><span class="spinner"></span></div>
+                        }
+                        else
+                        {
+                            @foreach (var m in ConversationMessages.OrderBy(x => x.CreatedAt))
+                            {
+                                <div class="message-view @(m.SenderId == SelectedUser?.Id ? "sent" : "received")">
+                                    <div class="msg-content">@m.Content</div>
+                                    <div class="msg-meta">@m.CreatedAt.ToRelativeTime() • @m.SenderName</div>
+                                </div>
+                            }
+                        }
+                    </div>
+                </div>
+            </div>
+        </div>
+    }
+</div>
+
+@code {
+    private List<UserDto> Users = new();
+    private string SearchQuery = "";
+    private string PhoneFilter = "";
+    private bool Loading = true;
+    private UserDto? SelectedUser;
+    private List<ConversationDto>? UserConversations;
+    private Guid? ViewingConversation;
+    private List<MessageDto>? ConversationMessages;
+
+    protected override async Task OnInitializedAsync()
+    {
+        await LoadUsersAsync();
+    }
+
+    private async Task LoadUsersAsync()
+    {
+        Loading = true;
+        try
+        {
+            var url = "/api/admin/users?pageSize=100";
+            if (!string.IsNullOrEmpty(SearchQuery)) url += $"&search={Uri.EscapeDataString(SearchQuery)}";
+            if (!string.IsNullOrEmpty(PhoneFilter)) url += $"&phone={Uri.EscapeDataString(PhoneFilter)}";
+            Users = await Http.GetFromJsonAsync<List<UserDto>>(url) ?? new();
+        }
+        catch { }
+        Loading = false;
+    }
+
+    private async Task SearchAsync() => await LoadUsersAsync();
+
+    private async Task ViewUserAsync(UserDto u)
+    {
+        SelectedUser = u;
+        UserConversations = null;
+        try
+        {
+            UserConversations = await Http.GetFromJsonAsync<List<ConversationDto>>($"/api/admin/users/{u.Id}/conversations");
+        }
+        catch { }
+    }
+
+    private async Task OpenConversationAsync(Guid convId)
+    {
+        ViewingConversation = convId;
+        ConversationMessages = null;
+        try
+        {
+            ConversationMessages = await Http.GetFromJsonAsync<List<MessageDto>>($"/api/admin/conversations/{convId}/messages?pageSize=200");
+        }
+        catch { }
+    }
+
+    private async Task ChangeStatusAsync(UserDto u, string status)
+    {
+        try
+        {
+            var resp = await Http.PutAsJsonAsync($"/api/admin/users/{u.Id}/status", new UpdateUserStatusRequest(status));
+            if (resp.IsSuccessStatusCode)
+            {
+                await Toast.ShowSuccessAsync($"وضعیت کاربر به {status} تغییر کرد.");
+                await LoadUsersAsync();
+            }
+        }
+        catch { await Toast.ShowErrorAsync("خطا در تغییر وضعیت."); }
+    }
+
+    private async Task ChangeRoleAsync(UserDto u, string role)
+    {
+        try
+        {
+            var resp = await Http.PutAsJsonAsync($"/api/admin/users/{u.Id}/role", new UpdateUserRoleRequest(role));
+            if (resp.IsSuccessStatusCode)
+            {
+                await Toast.ShowSuccessAsync($"نقش کاربر به {role} تغییر کرد.");
+                await LoadUsersAsync();
+            }
+        }
+        catch { await Toast.ShowErrorAsync("خطا در تغییر نقش."); }
+    }
+}

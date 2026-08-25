@@ -1,0 +1,351 @@
+@inject HttpClient Http
+@inject IChatHubClient Hub
+@inject IAppToastService Toast
+@inject IJSRuntime JS
+@implements IDisposable
+
+<div class="chat-window">
+    <header class="chat-header">
+        <button class="icon-btn back-btn" @onclick="@(() => OnBack.InvokeAsync())">
+            <svg width="24" height="24" viewBox="0 0 24 24"><path fill="currentColor" d="M20 11H7.83l5.59-5.59L12 4l-8 8 8 8 1.41-1.41L7.83 13H20v-2z"/></svg>
+        </button>
+        <UserAvatar Url="@Conversation.OtherParticipant?.AvatarUrl" Name="@Conversation.OtherParticipant?.FullName" Size="40" ShowOnline="true" IsOnline="@(Conversation.OtherParticipant?.IsOnline ?? false)" />
+        <div class="chat-header-info">
+            <div class="header-name">@(Conversation.OtherParticipant?.FullName ?? "بدون نام")</div>
+            <div class="header-status">
+                @if (Conversation.OtherParticipant?.IsOnline ?? false)
+                {
+                    <span class="online-text">آنلاین</span>
+                }
+                else if (Conversation.OtherParticipant?.LastSeen.HasValue ?? false)
+                {
+                    <span>آخرین بازدید @Conversation.OtherParticipant.LastSeen.Value.ToRelativeTime()</span>
+                }
+                else
+                {
+                    <span>آفلاین</span>
+                }
+                @if (OtherTyping)
+                {
+                    <span class="typing-indicator"> • در حال نوشتن...</span>
+                }
+            </div>
+        </div>
+        <div class="chat-header-actions">
+            <button class="icon-btn" title="جستجو">
+                <svg width="20" height="20" viewBox="0 0 24 24"><path fill="currentColor" d="M15.5 14h-.79l-.28-.27a6.5 6.5 0 0 0 1.48-5.34c-.47-2.78-2.79-5-5.59-5.34a6.505 6.505 0 0 0-7.27 7.27c.34 2.8 2.56 5.12 5.34 5.59a6.5 6.5 0 0 0 5.34-1.48l.27.28v.79l4.25 4.25c.41.41 1.08.41 1.49 0 .41-.41.41-1.08 0-1.49L15.5 14zm-6 0C7.01 14 5 11.99 5 9.5S7.01 5 9.5 5 14 7.01 14 9.5 11.99 14 9.5 14z"/></svg>
+            </button>
+        </div>
+    </header>
+
+    <div class="messages-container" id="messages-container-@Conversation.Id">
+        @if (LoadingMessages)
+        {
+            <div class="messages-loading"><span class="spinner"></span></div>
+        }
+        else if (Messages.Count == 0)
+        {
+            <div class="messages-empty">
+                <p>گفتگو را شروع کنید! یک پیام بفرستید.</p>
+            </div>
+        }
+        else
+        {
+            <div class="messages-list" id="messages-list">
+                @if (HasMoreMessages)
+                {
+                    <button class="load-more" @onclick="LoadMoreAsync">بارگذاری پیام‌های قدیمی‌تر</button>
+                }
+                @foreach (var msg in Messages.OrderBy(m => m.CreatedAt))
+                {
+                    <MessageBubble Message="@msg" IsMine="@(msg.SenderId == CurrentUser?.Id)" />
+                }
+            </div>
+        }
+    </div>
+
+    <div class="composer">
+        @if (AttachmentUpload != null)
+        {
+            <div class="upload-preview">
+                <div class="upload-name">@AttachmentUpload.FileName</div>
+                <div class="upload-progress">
+                    <div class="bar" style="width:@(AttachmentUpload.Percent)%"></div>
+                </div>
+                <span class="percent">@AttachmentUpload.Percent%</span>
+                <button class="icon-btn" @onclick="CancelAttachmentAsync">✕</button>
+            </div>
+        }
+        <div class="composer-input">
+            <button class="icon-btn" title="ضمیمه" @onclick="OpenFilePicker">
+                <svg width="24" height="24" viewBox="0 0 24 24"><path fill="currentColor" d="M16.5 6v11.5c0 2.21-1.79 4-4 4s-4-1.79-4-4V5a2.5 2.5 0 0 1 5 0v10.5c0 .55-.45 1-1 1s-1-.45-1-1V6H10v9.5a2.5 2.5 0 0 0 5 0V5c0-2.21-1.79-4-4-4S7 2.79 7 5v12.5c0 3.04 2.46 5.5 5.5 5.5s5.5-2.46 5.5-5.5V6h-1.5z"/></svg>
+            </button>
+            <InputFile OnChange="OnFileSelectedAsync" style="display:none" id="@($"file-input-{Conversation.Id}")" />
+            <textarea @bind="MessageText" @bind:event="oninput" @onkeydown="OnKeyDown" placeholder="پیام بنویسید..." rows="1"></textarea>
+            <button class="icon-btn send-btn" @onclick="SendAsync" disabled="@string.IsNullOrWhiteSpace(MessageText) && AttachmentUpload == null">
+                <svg width="24" height="24" viewBox="0 0 24 24"><path fill="currentColor" d="M2.01 21L23 12 2.01 3 2 10l15 2-15 2z"/></svg>
+            </button>
+        </div>
+    </div>
+</div>
+
+@code {
+    [Parameter] public ConversationDto Conversation { get; set; } = null!;
+    [Parameter] public UserDto? CurrentUser { get; set; }
+    [Parameter] public EventCallback OnBack { get; set; }
+
+    private List<MessageDto> Messages = new();
+    private bool LoadingMessages = true;
+    private bool HasMoreMessages;
+    private DateTime? OldestLoadedAt;
+    private string MessageText = "";
+    private bool OtherTyping;
+    private CancellationTokenSource? _typingCts;
+
+    private AttachmentUploadState? AttachmentUpload;
+    private CancellationTokenSource? _uploadCts;
+
+    protected override async Task OnInitializedAsync()
+    {
+        await LoadMessagesAsync();
+        await Hub.JoinConversationAsync(Conversation.Id);
+        Hub.OnMessage += OnMessageReceivedAsync;
+        Hub.OnUserTyping += OnUserTypingAsync;
+        Hub.OnUserStoppedTyping += OnUserStoppedTypingAsync;
+        Hub.OnMessageDelivered += OnMessageDeliveredAsync;
+        Hub.OnMessageRead += OnMessageReadAsync;
+    }
+
+    private async Task LoadMessagesAsync()
+    {
+        LoadingMessages = true;
+        try
+        {
+            var url = $"/api/conversations/{Conversation.Id}/messages?pageSize=50";
+            var list = await Http.GetFromJsonAsync<List<MessageDto>>(url) ?? new();
+            Messages = list;
+            if (list.Count > 0)
+            {
+                OldestLoadedAt = list.Min(m => m.CreatedAt);
+                HasMoreMessages = list.Count >= 50;
+            }
+            await ScrollToBottomAsync();
+        }
+        catch { }
+        LoadingMessages = false;
+    }
+
+    private async Task LoadMoreAsync()
+    {
+        if (OldestLoadedAt is null) return;
+        try
+        {
+            var before = OldestLoadedAt.Value.ToString("O");
+            var url = $"/api/conversations/{Conversation.Id}/messages/before/{Uri.EscapeDataString(before)}?pageSize=50";
+            var list = await Http.GetFromJsonAsync<List<MessageDto>>(url) ?? new();
+            if (list.Count > 0)
+            {
+                Messages.AddRange(list);
+                OldestLoadedAt = list.Min(m => m.CreatedAt);
+                HasMoreMessages = list.Count >= 50;
+                StateHasChanged();
+            }
+            else
+            {
+                HasMoreMessages = false;
+            }
+        }
+        catch { }
+    }
+
+    private async Task OnMessageReceivedAsync(HubMessage msg)
+    {
+        if (msg.ConversationId != Conversation.Id) return;
+        await InvokeAsync(async () =>
+        {
+            try
+            {
+                var url = $"/api/messages?includeRead=true"; // Just fetch the new message
+                // Fetch the latest messages
+                var list = await Http.GetFromJsonAsync<List<MessageDto>>($"/api/conversations/{Conversation.Id}/messages?pageSize=1");
+                if (list.Count > 0)
+                {
+                    var newMsg = list[0];
+                    if (!Messages.Any(m => m.Id == newMsg.Id))
+                    {
+                        Messages.Insert(0, newMsg);
+                        await Hub.NotifyMessageDeliveredAsync(Conversation.Id, newMsg.Id);
+                        await ScrollToBottomAsync();
+                    }
+                }
+            }
+            catch { }
+            StateHasChanged();
+        });
+    }
+
+    private Task OnUserTypingAsync(TypingPayload p)
+    {
+        if (p.ConversationId != Conversation.Id) return Task.CompletedTask;
+        return InvokeAsync(() =>
+        {
+            OtherTyping = true;
+            StateHasChanged();
+        });
+    }
+
+    private Task OnUserStoppedTypingAsync(TypingPayload p)
+    {
+        if (p.ConversationId != Conversation.Id) return Task.CompletedTask;
+        return InvokeAsync(() =>
+        {
+            OtherTyping = false;
+            StateHasChanged();
+        });
+    }
+
+    private Task OnMessageDeliveredAsync(DeliveryPayload p)
+    {
+        if (p.ConversationId != Conversation.Id) return Task.CompletedTask;
+        return InvokeAsync(() =>
+        {
+            var msg = Messages.FirstOrDefault(m => m.Id == p.MessageId);
+            if (msg is not null && msg.SenderId == CurrentUser?.Id)
+            {
+                // Update status to delivered
+                var idx = Messages.IndexOf(msg);
+                Messages[idx] = msg with { Status = "Delivered", DeliveredAt = DateTime.UtcNow };
+                StateHasChanged();
+            }
+        });
+    }
+
+    private Task OnMessageReadAsync(ReadPayload p)
+    {
+        if (p.ConversationId != Conversation.Id) return Task.CompletedTask;
+        return InvokeAsync(() =>
+        {
+            var msg = Messages.FirstOrDefault(m => m.Id == p.MessageId);
+            if (msg is not null && msg.SenderId == CurrentUser?.Id)
+            {
+                var idx = Messages.IndexOf(msg);
+                Messages[idx] = msg with { Status = "Read", ReadAt = DateTime.UtcNow, DeliveredAt = msg.DeliveredAt ?? DateTime.UtcNow };
+                StateHasChanged();
+            }
+        });
+    }
+
+    private async Task OnKeyDown(KeyboardEventArgs e)
+    {
+        if (e.Key == "Enter" && !e.ShiftKey)
+        {
+            await SendAsync();
+            return;
+        }
+
+        // Typing indicator
+        if (!string.IsNullOrEmpty(MessageText))
+        {
+            await Hub.SendTypingAsync(Conversation.Id);
+            _typingCts?.Cancel();
+            _typingCts = new CancellationTokenSource();
+            var ct = _typingCts.Token;
+            _ = Task.Run(async () =>
+            {
+                try { await Task.Delay(1500, ct); if (!ct.IsCancellationRequested) await Hub.StopTypingAsync(Conversation.Id); }
+                catch { }
+            });
+        }
+    }
+
+    private async Task SendAsync()
+    {
+        if (string.IsNullOrWhiteSpace(MessageText)) return;
+        var content = MessageText.Trim();
+        MessageText = "";
+        try
+        {
+            var resp = await Http.PostAsJsonAsync($"/api/conversations/{Conversation.Id}/messages", new SendMessageRequest(content, "Text", null));
+            if (resp.IsSuccessStatusCode)
+            {
+                var msg = await resp.Content.ReadFromJsonAsync<MessageDto>();
+                if (msg is not null)
+                {
+                    Messages.Add(msg);
+                    await Hub.NotifyMessageSentAsync(Conversation.Id, msg.Id);
+                    await ScrollToBottomAsync();
+                }
+            }
+        }
+        catch (Exception ex)
+        {
+            await Toast.ShowErrorAsync("ارسال پیام ناموفق بود.");
+        }
+    }
+
+    private async Task OpenFilePicker()
+    {
+        await JS.InvokeVoidAsync("eval", $"document.getElementById('file-input-{Conversation.Id}').click()");
+    }
+
+    private async Task OnFileSelectedAsync(InputFileChangeEventArgs e)
+    {
+        if (e.File is null) return;
+        var file = e.File;
+        AttachmentUpload = new AttachmentUploadState { FileName = file.Name, Percent = 0 };
+        _uploadCts = new CancellationTokenSource();
+
+        try
+        {
+            var progress = new Progress<FileUploadProgress>(p =>
+            {
+                AttachmentUpload.Percent = (int)(p.UploadedBytes * 100.0 / Math.Max(1, p.TotalBytes));
+                StateHasChanged();
+            });
+
+            // For now we use a simplified version - in production this would call IFileUploadService
+            await Toast.ShowInfoAsync($"فایل «{file.Name}» در حال آپلود...");
+            // TODO: invoke IFileUploadService.UploadAsync
+        }
+        catch (OperationCanceledException)
+        {
+            await Toast.ShowInfoAsync("آپلود لغو شد.");
+        }
+        catch (Exception ex)
+        {
+            await Toast.ShowErrorAsync($"خطا در آپلود: {ex.Message}");
+        }
+        finally
+        {
+            AttachmentUpload = null;
+        }
+    }
+
+    private async Task CancelAttachmentAsync()
+    {
+        _uploadCts?.Cancel();
+        AttachmentUpload = null;
+    }
+
+    private async Task ScrollToBottomAsync()
+    {
+        await Task.Delay(50);
+        await JS.InvokeVoidAsync("chatApp.scrollToBottom", $"messages-container-{Conversation.Id}");
+    }
+
+    public void Dispose()
+    {
+        Hub.OnMessage -= OnMessageReceivedAsync;
+        Hub.OnUserTyping -= OnUserTypingAsync;
+        Hub.OnUserStoppedTyping -= OnUserStoppedTypingAsync;
+        Hub.OnMessageDelivered -= OnMessageDeliveredAsync;
+        Hub.OnMessageRead -= OnMessageReadAsync;
+        _ = Hub.LeaveConversationAsync(Conversation.Id);
+    }
+
+    private class AttachmentUploadState
+    {
+        public string FileName { get; set; } = "";
+        public int Percent { get; set; }
+    }
+}

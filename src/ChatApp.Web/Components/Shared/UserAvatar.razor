@@ -1,0 +1,45 @@
+@inject IJSRuntime JS
+
+<div class="user-avatar" style="width:@(Size)px; height:@(Size)px; font-size:@(Size * 0.4)px">
+    @if (!string.IsNullOrEmpty(Url))
+    {
+        <img src="@Url" alt="@Name" />
+    }
+    else
+    {
+        <div class="avatar-fallback" style="background-color:@Color">
+            @(GetInitials(Name))
+        </div>
+    }
+    @if (ShowOnline && IsOnline)
+    {
+        <span class="online-dot"></span>
+    }
+</div>
+
+@code {
+    [Parameter] public string? Url { get; set; }
+    [Parameter] public string? Name { get; set; }
+    [Parameter] public int Size { get; set; } = 40;
+    [Parameter] public bool ShowOnline { get; set; }
+    [Parameter] public bool IsOnline { get; set; }
+
+    private string Color => GetColorForName(Name ?? "");
+
+    private static string GetInitials(string? name)
+    {
+        if (string.IsNullOrWhiteSpace(name)) return "?";
+        var parts = name.Trim().Split(' ', StringSplitOptions.RemoveEmptyEntries);
+        if (parts.Length == 0) return "?";
+        if (parts.Length == 1) return parts[0][..1].ToUpper();
+        return (parts[0][..1] + parts[1][..1]).ToUpper();
+    }
+
+    private static string GetColorForName(string name)
+    {
+        var colors = new[] { "#075E54", "#128C7E", "#25D366", "#34B7F1", "#5B6CFF", "#9B5DE5", "#F15BB5", "#FF6B6B", "#FFA500", "#9ACD32" };
+        var sum = 0;
+        foreach (var c in name) sum += c;
+        return colors[sum % colors.Length];
+    }
+}

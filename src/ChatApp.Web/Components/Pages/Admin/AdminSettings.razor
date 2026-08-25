@@ -1,0 +1,88 @@
+@inject HttpClient Http
+@inject IAppToastService Toast
+
+<div class="admin-section">
+    <h1>تنظیمات سیستم</h1>
+
+    <div class="settings-card">
+        <h3>شماره تلفن مدیر اولیه</h3>
+        <p class="hint">شماره‌ای که در زمان ثبت‌نام، نقش Admin به‌طور خودکار به آن تعلق می‌گیرد.</p>
+        <div class="form-row">
+            <input type="tel" @bind="AdminPhone" dir="ltr" placeholder="09162744975" />
+            <button class="btn-primary" @onclick="UpdateAdminPhoneAsync" disabled="@Loading">ذخیره</button>
+        </div>
+    </div>
+
+    <div class="settings-card">
+        <h3>جستجوی پیام‌ها</h3>
+        <p class="hint">می‌توانید در پیام‌های همه کاربران جستجو کنید (با ثبت در لاگ ممیزی).</p>
+        <div class="form-row">
+            <input type="search" @bind="MessageQuery" @oninput="@(() => {})" placeholder="عبارت جستجو..." @onkeypress="OnSearchKeyPress" />
+            <button class="btn-primary" @onclick="SearchMessagesAsync" disabled="@Searching">جستجو</button>
+        </div>
+        @if (MessageResults is not null)
+        {
+            <div class="search-results">
+                <p>@MessageResults.Count نتیجه یافت شد.</p>
+                @foreach (var m in MessageResults)
+                {
+                    <div class="search-result-item">
+                        <div class="result-meta">
+                            <span>@m.SenderName</span>
+                            <small>@m.CreatedAt.ToRelativeTime()</small>
+                        </div>
+                        <div class="result-content">@m.Content</div>
+                    </div>
+                }
+            </div>
+        }
+    </div>
+</div>
+
+@code {
+    private string AdminPhone = "";
+    private bool Loading;
+    private string MessageQuery = "";
+    private bool Searching;
+    private List<MessageDto>? MessageResults;
+
+    protected override async Task OnInitializedAsync()
+    {
+        try
+        {
+            var result = await Http.GetFromJsonAsync<dynamic>("/api/admin/settings/admin-phone");
+            AdminPhone = ((string)result.PhoneNumber).ToDisplayPhone();
+        }
+        catch { }
+    }
+
+    private async Task UpdateAdminPhoneAsync()
+    {
+        Loading = true;
+        try
+        {
+            var resp = await Http.PutAsJsonAsync("/api/admin/settings/admin-phone", new UpdateAdminPhoneRequest(AdminPhone));
+            if (resp.IsSuccessStatusCode)
+                await Toast.ShowSuccessAsync("شماره مدیر به‌روزرسانی شد.");
+        }
+        catch { await Toast.ShowErrorAsync("خطا در به‌روزرسانی."); }
+        Loading = false;
+    }
+
+    private async Task SearchMessagesAsync()
+    {
+        if (string.IsNullOrEmpty(MessageQuery)) return;
+        Searching = true;
+        try
+        {
+            MessageResults = await Http.GetFromJsonAsync<List<MessageDto>>($"/api/admin/messages/search?query={Uri.EscapeDataString(MessageQuery)}&pageSize=100");
+        }
+        catch { }
+        Searching = false;
+    }
+
+    private async Task OnSearchKeyPress(KeyboardEventArgs e)
+    {
+        if (e.Key == "Enter") await SearchMessagesAsync();
+    }
+}

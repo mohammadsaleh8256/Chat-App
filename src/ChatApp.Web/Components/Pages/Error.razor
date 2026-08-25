@@ -1,0 +1,25 @@
+@page "/Error"
+@using System.Diagnostics
+@inject IHostEnvironment Env
+
+<PageTitle>خطا</PageTitle>
+
+<h1>خطا</h1>
+<p>خطایی رخ داد. لطفاً دوباره تلاش کنید.</p>
+
+@if (Env.IsDevelopment())
+{
+    <details>
+        <summary>جزئیات خطا</summary>
+        <p>@Exception?.Message</p>
+        <pre>@Exception?.StackTrace</pre>
+    </details>
+}
+
+<p>
+    <a href="/">بازگشت به خانه</a>
+</p>
+
+@code {
+    [Parameter] public Exception? Exception { get; set; }
+}

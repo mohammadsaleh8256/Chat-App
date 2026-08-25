@@ -1,0 +1,80 @@
+@inject HttpClient Http
+
+<div class="admin-section">
+    <h1>داشبورد</h1>
+    @if (Stats is null)
+    {
+        <div class="loading"><span class="spinner"></span></div>
+    }
+    else
+    {
+        <div class="stats-grid">
+            <div class="stat-card">
+                <div class="stat-icon">👥</div>
+                <div class="stat-info">
+                    <div class="stat-label">کل کاربران</div>
+                    <div class="stat-value">@Stats.TotalUsers</div>
+                </div>
+            </div>
+            <div class="stat-card">
+                <div class="stat-icon">🟢</div>
+                <div class="stat-info">
+                    <div class="stat-label">آنلاین</div>
+                    <div class="stat-value">@Stats.OnlineUsers</div>
+                </div>
+            </div>
+            <div class="stat-card">
+                <div class="stat-icon">💬</div>
+                <div class="stat-info">
+                    <div class="stat-label">گفتگوها</div>
+                    <div class="stat-value">@Stats.TotalConversations</div>
+                </div>
+            </div>
+            <div class="stat-card">
+                <div class="stat-icon">✉️</div>
+                <div class="stat-info">
+                    <div class="stat-label">پیام‌ها</div>
+                    <div class="stat-value">@Stats.TotalMessages</div>
+                </div>
+            </div>
+            <div class="stat-card">
+                <div class="stat-icon">📎</div>
+                <div class="stat-info">
+                    <div class="stat-label">فایل‌ها</div>
+                    <div class="stat-value">@Stats.TotalAttachments</div>
+                </div>
+            </div>
+            <div class="stat-card">
+                <div class="stat-icon">💾</div>
+                <div class="stat-info">
+                    <div class="stat-label">حجم فایل‌ها</div>
+                    <div class="stat-value">@Stats.TotalAttachmentSizeBytes.FormatFileSize()</div>
+                </div>
+            </div>
+            <div class="stat-card">
+                <div class="stat-icon">👑</div>
+                <div class="stat-info">
+                    <div class="stat-label">مدیران</div>
+                    <div class="stat-value">@Stats.TotalAdmins</div>
+                </div>
+            </div>
+            <div class="stat-card">
+                <div class="stat-icon">🚫</div>
+                <div class="stat-info">
+                    <div class="stat-label">غیرفعال</div>
+                    <div class="stat-value">@Stats.DisabledUsers</div>
+                </div>
+            </div>
+        </div>
+    }
+</div>
+
+@code {
+    private DashboardStatsDto? Stats;
+
+    protected override async Task OnInitializedAsync()
+    {
+        try { Stats = await Http.GetFromJsonAsync<DashboardStatsDto>("/api/admin/dashboard"); }
+        catch { }
+    }
+}

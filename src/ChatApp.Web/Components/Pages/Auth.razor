@@ -1,0 +1,171 @@
+@page "/"
+@page "/login"
+@page "/register"
+@rendermode InteractiveServer
+@inject HttpClient Http
+@inject IJwtTokenStore Tokens
+@inject NavigationManager Nav
+@inject AuthenticationStateProvider AuthState
+@inject IAppToastService Toast
+
+<PageTitle>ورود - چت‌اپ</PageTitle>
+
+<div class="auth-page">
+    <div class="auth-card">
+        <div class="auth-header">
+            <div class="auth-logo">
+                <svg viewBox="0 0 24 24" width="48" height="48">
+                    <path fill="currentColor" d="M12 2C6.5 2 2 6 2 11c0 1.8.6 3.5 1.6 5L2 22l6-1.6c1.5.7 3 1 4.5 1 5.5 0 10-4 10-9S17.5 2 12 2z"/>
+                </svg>
+            </div>
+            <h1>@(Mode == "login" ? "ورود به چت‌اپ" : "ثبت‌نام در چت‌اپ")</h1>
+            <p class="auth-subtitle">پیام‌رسان سریع و امن</p>
+        </div>
+
+        <EditForm Model="@Form" OnValidSubmit="@SubmitAsync" FormName="auth">
+            <DataAnnotationsValidator />
+
+            @if (Mode == "register")
+            {
+                <div class="form-row">
+                    <div class="form-group half">
+                        <label>نام</label>
+                        <InputText @bind-Value="Form.FirstName" placeholder="نام" />
+                        <ValidationMessage For="@(() => Form.FirstName)" />
+                    </div>
+                    <div class="form-group half">
+                        <label>نام خانوادگی</label>
+                        <InputText @bind-Value="Form.LastName" placeholder="نام خانوادگی" />
+                        <ValidationMessage For="@(() => Form.LastName)" />
+                    </div>
+                </div>
+            }
+
+            <div class="form-group">
+                <label>شماره تلفن</label>
+                <InputText @bind-Value="Form.PhoneNumber" placeholder="09162744975" dir="ltr" type="tel" />
+                <ValidationMessage For="@(() => Form.PhoneNumber)" />
+            </div>
+
+            <div class="form-group">
+                <label>رمز عبور</label>
+                <InputText @bind-Value="Form.Password" type="password" placeholder="••••••••" dir="ltr" />
+                <ValidationMessage For="@(() => Form.Password)" />
+            </div>
+
+            @if (!string.IsNullOrEmpty(Error))
+            {
+                <div class="alert-error">@Error</div>
+            }
+
+            <button type="submit" class="btn-primary" disabled="@Loading">
+                @if (Loading)
+                {
+                    <span class="btn-spinner"></span>
+                }
+                else
+                {
+                    @(Mode == "login" ? "ورود" : "ثبت‌نام")
+                }
+            </button>
+        </EditForm>
+
+        <div class="auth-toggle">
+            @if (Mode == "login")
+            {
+                <span>حساب ندارید؟ <a href="/register" @onclick.prevent="@(() => SwitchMode("register"))">ثبت‌نام کنید</a></span>
+            }
+            else
+            {
+                <span>حساب دارید؟ <a href="/login" @onclick.prevent="@(() => SwitchMode("login"))">وارد شوید</a></span>
+            }
+        </div>
+    </div>
+</div>
+
+@code {
+    [Parameter] public string Mode { get; set; } = "login";
+
+    private AuthFormDto Form { get; set; } = new();
+    private bool Loading;
+    private string? Error;
+
+    protected override void OnInitialized()
+    {
+        if (string.IsNullOrEmpty(Mode)) Mode = "login";
+    }
+
+    private void SwitchMode(string m) { Mode = m; Error = null; }
+
+    private async Task SubmitAsync()
+    {
+        Loading = true;
+        Error = null;
+        try
+        {
+            if (Mode == "login")
+            {
+                var req = new LoginRequest(Form.PhoneNumber, Form.Password);
+                var resp = await Http.PostAsJsonAsync("/api/auth/login", req);
+                if (!resp.IsSuccessStatusCode)
+                {
+                    await ExtractErrorAsync(resp, m => Error = m);
+                    return;
+                }
+                var auth = await resp.Content.ReadFromJsonAsync<AuthResponse>();
+                await Tokens.SetTokensAsync(auth!.AccessToken, auth!.RefreshToken);
+            }
+            else
+            {
+                var req = new RegisterRequest(Form.FirstName ?? "", Form.LastName ?? "", Form.PhoneNumber, Form.Password);
+                var resp = await Http.PostAsJsonAsync("/api/auth/register", req);
+                if (!resp.IsSuccessStatusCode)
+                {
+                    await ExtractErrorAsync(resp, m => Error = m);
+                    return;
+                }
+                var auth = await resp.Content.ReadFromJsonAsync<AuthResponse>();
+                await Tokens.SetTokensAsync(auth!.AccessToken, auth!.RefreshToken);
+            }
+            Nav.NavigateTo("/app", forceLoad: true);
+        }
+        catch (Exception ex)
+        {
+            Error = "خطا در ارتباط با سرور. لطفاً دوباره تلاش کنید.";
+        }
+        finally
+        {
+            Loading = false;
+        }
+    }
+
+    private async Task ExtractErrorAsync(HttpResponseMessage resp, Action<string> setError)
+    {
+        try
+        {
+            var body = await resp.Content.ReadFromJsonAsync<ChatApp.Contracts.Common.ApiErrorResponse>();
+            setError(body?.Message ?? "خطا در ورود.");
+        }
+        catch
+        {
+            setError("خطا در ارتباط با سرور.");
+        }
+    }
+
+    public class AuthFormDto
+    {
+        [System.ComponentModel.DataAnnotations.Required(ErrorMessage = "نام الزامی است.")]
+        public string? FirstName { get; set; }
+
+        [System.ComponentModel.DataAnnotations.Required(ErrorMessage = "نام خانوادگی الزامی است.")]
+        public string? LastName { get; set; }
+
+        [System.ComponentModel.DataAnnotations.Required(ErrorMessage = "شماره تلفن الزامی است.")]
+        [System.ComponentModel.DataAnnotations.RegularExpression(@"^(\+?98|0)?9\d{9}$", ErrorMessage = "شماره موبایل معتبر نیست.")]
+        public string PhoneNumber { get; set; } = "";
+
+        [System.ComponentModel.DataAnnotations.Required(ErrorMessage = "رمز عبور الزامی است.")]
+        [System.ComponentModel.DataAnnotations.MinLength(6, ErrorMessage = "رمز عبور باید حداقل ۶ کاراکتر باشد.")]
+        public string Password { get; set; } = "";
+    }
+}
