@@ -10,6 +10,24 @@
  * to broadcast events to connected clients. This is needed because
  * the API routes run in the Next.js process, not here.
  */
+
+// ============================================================
+// Load .env from project root BEFORE any other import that uses env vars.
+// This file lives at: <project-root>/mini-services/websocket/index.ts
+// So the project root .env is at ../../.env
+// ============================================================
+import { config } from 'dotenv';
+import { resolve } from 'path';
+
+config({ path: resolve(__dirname, '..', '..', '.env') });
+
+// Fall back to a default SQLite path if DATABASE_URL is not set,
+// so the service can still start in dev without crashing.
+if (!process.env.DATABASE_URL) {
+  process.env.DATABASE_URL = `file:${resolve(__dirname, '..', '..', 'db', 'messenger.db')}`;
+  console.warn('[ws] DATABASE_URL not set, using default:', process.env.DATABASE_URL);
+}
+
 import { createServer, IncomingMessage, ServerResponse } from 'http';
 import { Server, Socket } from 'socket.io';
 import { PrismaClient } from '@prisma/client';

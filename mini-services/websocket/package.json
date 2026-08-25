@@ -3,11 +3,17 @@
   "version": "1.0.0",
   "private": true,
   "scripts": {
-    "dev": "bun --hot index.ts",
-    "start": "bun index.ts"
+    "dev": "tsx watch index.ts",
+    "dev:bun": "bun --hot index.ts",
+    "start": "tsx index.ts",
+    "generate": "prisma generate --schema ../../prisma/schema.prisma",
+    "postinstall": "prisma generate --schema ../../prisma/schema.prisma || echo 'prisma generate skipped (run manually: bun run generate)'"
   },
   "dependencies": {
     "socket.io": "^4.8.3",
-    "@prisma/client": "^6.11.1"
+    "@prisma/client": "^6.11.1",
+    "prisma": "^6.11.1",
+    "dotenv": "^16.4.5",
+    "tsx": "^4.19.2"
   }
 }

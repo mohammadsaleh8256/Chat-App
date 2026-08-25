@@ -78,46 +78,116 @@ public/
 
 ## 🚀 Setup
 
-### 1. نصب dependencies
+### راه سریع (توصیه شده) — اجرای اسکریپت خودکار
 
-```bash
-bun install
-cd mini-services/websocket && bun install && cd ..
+بعد از clone کردن repository:
+
+**Windows (CMD یا PowerShell):**
+```cmd
+setup.bat
 ```
 
-### 2. پیکربندی محیط
+**Linux / macOS:**
+```bash
+chmod +x setup.sh
+./setup.sh
+```
+
+اسکریپت به‌طور خودکار:
+1. dependencies اصلی و mini-service را نصب می‌کند
+2. Prisma Client را برای mini-service تولید می‌کند
+3. فایل `.env` را از `.env.example` می‌سازد
+4. دیتابیس را ایجاد و ادمین اولیه را seed می‌کند
+
+> ⚠️ بعد از اجرای setup، فایل `.env` را باز کنید و `STORAGE_DIR` را به مسیر absolute پروژه خودتان تنظیم کنید (مثال: `C:/Users/MS/Documents/MyProjects/Chat-App/storage`).
+
+---
+
+### راه دستی (گام‌به‌گام)
+
+#### 1. نصب dependencies
+
+اگر [Bun](https://bun.sh) نصب دارید (توصیه شده):
+```bash
+bun install
+cd mini-services/websocket
+bun install
+cd ../..
+```
+
+اگر فقط Node.js دارید:
+```bash
+npm install
+cd mini-services/websocket
+npm install
+cd ../..
+```
+
+#### 2. تولید Prisma Client برای mini-service
+
+این مرحله **بسیار مهم** است — بدون آن mini-service خطای `@prisma/client did not initialize yet` می‌دهد:
+
+```bash
+cd mini-services/websocket
+npx prisma generate --schema ../../prisma/schema.prisma
+cd ../..
+```
+
+#### 3. پیکربندی محیط
 
 ```bash
 cp .env.example .env
-# سپس مقادیر را در .env قرار دهید (JWT_SECRET، INITIAL_ADMIN_PHONE، و غیره)
 ```
 
-### 3. راه‌اندازی دیتابیس
+سپس فایل `.env` را باز کنید و این مقادیر را تنظیم کنید:
+- `JWT_SECRET`: یک رشته تصادفی طولانی (≥32 کاراکتر)
+- `INITIAL_ADMIN_PHONE`: شماره موبایل مدیر اولیه (مثال: `09123456789`)
+- `INITIAL_ADMIN_PASSWORD`: رمز عبور مدیر
+- `STORAGE_DIR`: مسیر absolute پوشه storage (در پروژه خودتان)
+  - Windows: `C:/Users/MS/Documents/MyProjects/Chat-App/storage`
+  - Linux: `/home/user/Chat-App/storage`
+  - macOS: `/Users/user/Chat-App/storage`
+  - **از `/` در مسیرها استفاده کنید، حتی در Windows** (Prisma و Node آن را به‌درستی handle می‌کنند)
+
+#### 4. راه‌اندازی دیتابیس
 
 ```bash
-bun run db:push      # اعمال schema به SQLite
-bun run db:generate  # تولید Prisma Client
-bun scripts/seed.js  # ایجاد ادمین اولیه از env
+# اعمال schema به SQLite
+bun run db:push      # یا: npx prisma db push --accept-data-loss
+
+# تولید Prisma Client اصلی (برای Next.js)
+bun run db:generate  # یا: npx prisma generate
+
+# ایجاد ادمین اولیه از env vars
+bun scripts/seed.js  # یا: node scripts/seed.js
 ```
 
-### 4. اجرا در محیط Development
+#### 5. اجرا در محیط Development
 
+شما به **دو ترمینال** نیاز دارید:
+
+**ترمینال 1 — Next.js app:**
 ```bash
-# ترمینال 1: Next.js
-bun run dev
-
-# ترمینال 2: WebSocket service
-cd mini-services/websocket && bun run dev
+bun run dev          # یا: npm run dev
 ```
+از `http://localhost:3000` بازدید کنید.
 
-سپس به `http://localhost:3000` بروید.
+**ترمینال 2 — WebSocket mini-service:**
+```bash
+cd mini-services/websocket
+bun run dev          # یا: npm run dev
+```
+این سرویس روی `http://localhost:3003` اجرا می‌شود.
 
-### 5. Production Build
+> 💡 اگر `bun` ندارید، mini-service به‌صورت خودکار از `tsx` استفاده می‌کند (نیازی به نصب جداگانه نیست).
+
+#### 6. Production Build
 
 ```bash
 bun run build
-bun run start
+bun run start       # یا: npm run start
 ```
+
 
 ## 🔐 احراز هویت
 
@@ -198,3 +268,166 @@ bun run start
 ## 📜 License
 
 MIT — این پروژه نمونه است و هیچ وابستگی تجاری به WhatsApp ندارد.
+
+---
+
+## 🔧 Troubleshooting
+
+### 1. خطای `@prisma/client did not initialize yet`
+
+**علت:** Prisma Client برای mini-service تولید نشده است. هر کدام از Next.js و mini-service به Prisma Client خودشان نیاز دارند.
+
+**راه‌حل:**
+```bash
+cd mini-services/websocket
+npx prisma generate --schema ../../prisma/schema.prisma
+```
+
+اگر باز هم خطا داد:
+```bash
+# حذف node_modules و نصب مجدد
+rm -rf node_modules          # Windows: rmdir /s /q node_modules
+npm install                  # یا: bun install
+npx prisma generate --schema ../../prisma/schema.prisma
+```
+
+### 2. خطای `bun: command not found` یا `bun --hot` کار نمی‌کند
+
+**علت:** Bun نصب نیست. (در Windows رایج است.)
+
+**راه‌حل:** `package.json` mini-service به‌صورت خودکار از `tsx` به‌عنوان جایگزین استفاده می‌کند. کافیست اجرا کنید:
+```bash
+npm run dev
+# یا: npx tsx watch index.ts
+```
+
+برای نصب Bun: https://bun.sh
+
+### 3. خطای `Cannot find module 'dotenv'` در mini-service
+
+**راه‌حل:**
+```bash
+cd mini-services/websocket
+npm install dotenv
+# یا: bun add dotenv
+```
+
+### 4. خطای `DATABASE_URL` not found در mini-service
+
+**علت:** فایل `.env` در ریشه پروژه وجود ندارد یا `DATABASE_URL` در آن ست نشده.
+
+**راه‌حل:**
+1. مطمئن شوید فایل `.env` در ریشه پروژه (کنار `package.json`) وجود دارد.
+2. مطمئن شوید این خط در `.env` وجود دارد:
+   ```
+   DATABASE_URL="file:./dev.db"
+   ```
+3. mini-service به‌طور خودکار `.env` ریشه پروژه را می‌خواند.
+
+### 5. خطای `EADDRINUSE: address already in use :::3003`
+
+**علت:** پورت 3003 در حال استفاده است (احتمالاً سرویس قبلی هنوز در حال اجراست).
+
+**راه‌حل (Windows):**
+```cmd
+netstat -ano | findstr :3003
+taskkill /PID <PID> /F
+```
+
+**راه‌حل (Linux/macOS):**
+```bash
+lsof -ti:3003 | xargs kill -9
+```
+
+### 6. خطای `PrismaClientInitializationError: Database doesn't exist`
+
+**راه‌حل:**
+```bash
+bun run db:push      # یا: npx prisma db push --accept-data-loss
+```
+
+### 7. خطای `Cannot find module '@/lib/db'` یا مشابه در Next.js
+
+**علت:** TypeScript path aliases کار نمی‌کنند.
+
+**راه‌حل:**
+```bash
+bun run db:generate   # یا: npx prisma generate
+```
+
+### 8. مشکل در آپلود فایل یا "Storage directory not found"
+
+**علت:** `STORAGE_DIR` در `.env` اشتباه است یا پوشه وجود ندارد.
+
+**راه‌حل:**
+1. در `.env` مقدار `STORAGE_DIR` را به مسیر absolute پروژه خودتان تنظیم کنید:
+   - Windows: `STORAGE_DIR="C:/Users/MS/Documents/MyProjects/Chat-App/storage"`
+   - Linux: `STORAGE_DIR="/home/user/Chat-App/storage"`
+2. اگر مسیر relative می‌خواهید، از `./storage` استفاده کنید (به‌طور خودکار به‌نسبت project root حل می‌شود).
+3. پوشه به‌صورت خودکار در اولین آپلود ساخته می‌شود.
+
+### 9. WebSocket نمی‌تواند وصل شود (banner "در حال اتصال مجدد...")
+
+**علت‌های ممکن:**
+1. mini-service در حال اجرا نیست → `cd mini-services/websocket && npm run dev`
+2. پورت اشتباه است → در `.env` مطمئن شوید `WEBSOCKET_PORT=3003` و `NEXT_PUBLIC_WS_PORT=3003`
+3. فایروال یا آنتی‌ویروس پورت 3003 را مسدود می‌کند
+
+**تست اتصال:**
+```bash
+curl http://localhost:3003/health
+# باید برگرداند: {"ok":true,"uptime":...,"connections":0}
+```
+
+### 10. مشکل در Windows: مسیرهای فایل با `\` به جای `/`
+
+همیشه از `/` در مسیرها استفاده کنید، حتی در Windows:
+- ❌ `C:\Users\MS\...\storage`
+- ✅ `C:/Users/MS/.../storage`
+
+Node.js و Prisma به‌طور خودکار `/` را handle می‌کنند. `\` می‌تواند به‌عنوان escape character تفسیر شود.
+
+### 11. خطای `ECONNREFUSED` هنگام fetch از client
+
+اگر در مرورگر ارور `net::ERR_CONNECTION_REFUSED` می‌بینید:
+1. مطمئن شوید Next.js در حال اجراست: `curl http://localhost:3000`
+2. مطمئن شوید mini-service در حال اجراست: `curl http://localhost:3003/health`
+3. اگر هر دو بالا هستند، proxy ممکن است مشکل داشته باشد — سیستم را restart کنید.
+
+### 12. مشکل در نصب dependencies با npm روی Windows
+
+اگر `npm install` خطای permission داد:
+1. CMD را به‌صورت **Administrator** باز کنید
+2. یا از PowerShell استفاده کنید:
+   ```powershell
+   Set-ExecutionPolicy -Scope CurrentUser -ExecutionPolicy RemoteSigned
+   npm install
+   ```
+
+### 13. خطای `Port 3000 is already in use` برای Next.js
+
+**راه‌حل (Windows):**
+```cmd
+netstat -ano | findstr :3000
+taskkill /PID <PID> /F
+```
+
+سپس دوباره `npm run dev` را اجرا کنید.
+
+### 14. چک‌لیست نهایی قبل از گزارش مشکل
+
+قبل از گزارش مشکل، این موارد را چک کنید:
+- [ ] Node.js نسخه 18+ نصب است (`node --version`)
+- [ ] Bun (اختیاری) نصب است (`bun --version`)
+- [ ] فایل `.env` در ریشه پروژه وجود دارد و `DATABASE_URL` در آن ست شده
+- [ ] `STORAGE_DIR` به مسیر absolute صحیح پروژه شما تنظیم شده
+- [ ] هر دو سرویس در حال اجرا هستند:
+  - Next.js روی پورت 3000
+  - WebSocket روی پورت 3003
+- [ ] `curl http://localhost:3000` پاسخ می‌دهد
+- [ ] `curl http://localhost:3003/health` پاسخ می‌دهد
+- [ ] دیتابیس ساخته شده: `bun run db:push` اجرا شده
+- [ ] Prisma Client تولید شده: `bun run db:generate`
+- [ ] mini-service Prisma Client تولید شده: `cd mini-services/websocket && npx prisma generate --schema ../../prisma/schema.prisma`
+- [ ] ادمین seed شده: `bun scripts/seed.js` اجرا شده
+

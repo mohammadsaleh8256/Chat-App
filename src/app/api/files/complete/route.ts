@@ -2,8 +2,9 @@ import { NextResponse } from 'next/server';
 import { db } from '@/lib/db';
 import { getCurrentUser } from '@/server/auth/session';
 import { withErrorHandler, parseOrThrow } from '@/lib/api-helpers';
-import { completeUpload, relativeStoragePath } from '@/server/storage';
+import { completeUpload, relativeStoragePath, FILE_DIR } from '@/server/storage';
 import { z } from 'zod';
+import path from 'path';
 
 const completeSchema = z.object({
   uploadId: z.string().min(1),
@@ -30,7 +31,7 @@ export const POST = withErrorHandler(async (req: Request) => {
   }
 
   const ext = attachment.originalName.match(/\.[a-zA-Z0-9]+$/)?.[0] || '';
-  const finalPath = `/home/z/my-project/storage/files/${input.uploadId}${ext}`;
+  const finalPath = path.join(FILE_DIR, `${input.uploadId}${ext}`);
   await completeUpload(input.uploadId, finalPath, input.totalChunks);
 
   await db.attachment.update({
