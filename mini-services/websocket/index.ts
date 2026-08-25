@@ -102,9 +102,16 @@ const httpServer = createServer(async (req: IncomingMessage, res: ServerResponse
 });
 
 // ====== Socket.io server ======
+// CORS: allow all origins in dev (so the Next.js app on :3000 can connect
+// to the WS service on :3003). In production, set WEBSOCKET_ALLOWED_ORIGIN.
+const ALLOWED_ORIGIN = process.env.WEBSOCKET_ALLOWED_ORIGIN || '*';
 const io = new Server(httpServer, {
   path: '/',
-  cors: { origin: '*', methods: ['GET', 'POST'] },
+  cors: {
+    origin: ALLOWED_ORIGIN === '*' ? true : ALLOWED_ORIGIN.split(','),
+    methods: ['GET', 'POST'],
+    credentials: ALLOWED_ORIGIN !== '*',
+  },
   pingTimeout: 60000,
   pingInterval: 25000,
 });

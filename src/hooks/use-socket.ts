@@ -15,6 +15,41 @@ interface UseSocketResult {
 
 const WS_PORT = process.env.NEXT_PUBLIC_WS_PORT || '3003';
 
+// ============================================================
+// Detect connection mode:
+// - In sandbox (preview-z.ai): use Caddy gateway with XTransformPort query param
+//   e.g. io('/?XTransformPort=3003')
+// - In local dev (localhost / 127.0.0.1 / custom domain): connect DIRECTLY to WS port
+//   e.g. io('http://localhost:3003')
+//
+// We detect sandbox by checking hostname. The sandbox uses a *.space-z.ai domain.
+// Everything else is treated as local dev.
+// ============================================================
+function getSocketUrl(): string {
+  if (typeof window === 'undefined') return ''; // SSR safe
+  const { hostname } = window.location;
+  // Sandbox preview uses space-z.ai domain
+  const isSandbox = hostname.includes('space-z.ai') || hostname.includes('preview-');
+  if (isSandbox) {
+    // Use same origin + query param for Caddy gateway routing
+    return ''; // empty string = same origin
+  }
+  // Local dev: connect directly to the WS service port
+  return `http://${hostname}:${WS_PORT}`;
+}
+
+function getSocketPath(): string {
+  if (typeof window === 'undefined') return '/';
+  const { hostname } = window.location;
+  const isSandbox = hostname.includes('space-z.ai') || hostname.includes('preview-');
+  if (isSandbox) {
+    // Caddy gateway requires the query param + path '/'
+    return '/?XTransformPort=' + WS_PORT;
+  }
+  // Direct connection: just use root path
+  return '/';
+}
+
 let socketSingleton: Socket | null = null;
 
 export function useSocket(): UseSocketResult {
@@ -41,19 +76,18 @@ export function useSocket(): UseSocketResult {
     // Reuse singleton
     if (socketSingleton) {
       socketRef.current = socketSingleton;
-      // Set initial connection state in a microtask to avoid setState-in-effect warning
       queueMicrotask(() => setIsConnected(socketSingleton?.connected ?? false));
       return;
     }
 
-    // Get the session token from cookie (httpOnly, so we can't read it directly)
-    // We need an endpoint to fetch a WS-token. For simplicity, use the auth/me cookie via
-    // a separate ws-token endpoint... Actually, since the cookie is httpOnly we cannot read
-    // it from JS. We need a /api/auth/ws-token endpoint that returns a short-lived token.
-    // For simplicity in this MVP, we fetch /api/auth/me and use the cookie that's already sent.
-    // But socket.io doesn't send cookies via fetch by default... actually it does, since we
-    // use same-origin and withCredentials.
-    const socket = io('/?XTransformPort=' + WS_PORT, {
+    const url = getSocketUrl();
+    const path = getSocketPath();
+    const isSandbox = path.includes('XTransformPort');
+
+    console.log('[ws] connecting to:', isSandbox ? `${window.location.origin}${path}` : `${url}${path}`);
+
+    const socket = io(url, {
+      path: isSandbox ? '/' : '/',
       transports: ['websocket', 'polling'],
       forceNew: true,
       reconnection: true,
@@ -62,8 +96,9 @@ export function useSocket(): UseSocketResult {
       reconnectionDelayMax: 10000,
       timeout: 10000,
       withCredentials: true,
+      // For sandbox: pass XTransformPort as query param
+      query: isSandbox ? { XTransformPort: WS_PORT } : undefined,
       auth: async (cb) => {
-        // Fetch a one-time WS token from the server
         try {
           const res = await fetch('/api/auth/ws-token');
           if (res.ok) {
@@ -81,10 +116,16 @@ export function useSocket(): UseSocketResult {
     socketRef.current = socket;
     socketSingleton = socket;
 
-    socket.on('connect', () => setIsConnected(true));
-    socket.on('disconnect', () => setIsConnected(false));
+    socket.on('connect', () => {
+      console.log('[ws] connected');
+      setIsConnected(true);
+    });
+    socket.on('disconnect', () => {
+      console.log('[ws] disconnected');
+      setIsConnected(false);
+    });
     socket.on('connect_error', (err) => {
-      console.warn('[ws] connect error', err.message);
+      console.warn('[ws] connect error:', err.message);
       setIsConnected(false);
     });
 
