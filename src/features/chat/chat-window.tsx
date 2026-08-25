@@ -8,7 +8,6 @@ import { ArrowRight, MoreVertical, Phone, Video, Search } from 'lucide-react';
 import { MessageBubble } from './message-bubble';
 import { MessageInput } from './message-input';
 import { useChatStore } from '@/store/chat';
-import { useSocket } from '@/hooks/use-socket';
 import { useRouter } from '@/lib/router';
 import type { ChatMessage } from '@/types';
 import { api, avatarColor, formatTime, getInitials, formatRelativeTime } from '@/lib/api';
@@ -20,12 +19,14 @@ interface ChatWindowProps {
 }
 
 export function ChatWindow({ conversationId, onBack }: ChatWindowProps) {
-  const { messages, loadingMessages, loadMessages, sendMessage, deleteMessage } = useChatStore();
+  const messages = useChatStore((s) => s.messages);
+  const loadingMessages = useChatStore((s) => s.loadingMessages);
+  const loadMessages = useChatStore((s) => s.loadMessages);
+  const deleteMessage = useChatStore((s) => s.deleteMessage);
   const conversations = useChatStore((s) => s.conversations);
   const presence = useChatStore((s) => s.presence);
   const typing = useChatStore((s) => s.typing);
   const loadMoreMessages = useChatStore((s) => s.loadMoreMessages);
-  const { joinConversation, leaveConversation, emitRead } = useSocket();
   const { push } = useRouter();
   const [replyTo, setReplyTo] = useState<ChatMessage | null>(null);
   const [forwardingMessage, setForwardingMessage] = useState<ChatMessage | null>(null);
@@ -43,7 +44,6 @@ export function ChatWindow({ conversationId, onBack }: ChatWindowProps) {
 
   // Other user (for direct chat)
   const otherUserId = useMemo(() => {
-    // Best-effort: get from last message sender
     const otherMsg = convMessages.find((m) => !m.isOwn);
     return otherMsg?.senderId;
   }, [convMessages]);
@@ -51,22 +51,13 @@ export function ChatWindow({ conversationId, onBack }: ChatWindowProps) {
   const otherPresence = otherUserId ? presence[otherUserId] : undefined;
   const isTyping = otherUserId && typing[conversationId]?.[otherUserId];
 
-  // Load messages when conversation changes (only on conversationId change, not on socket callback identity change)
-  const joinRef = useRef(joinConversation);
-  const leaveRef = useRef(leaveConversation);
-  joinRef.current = joinConversation;
-  leaveRef.current = leaveConversation;
-
+  // Load messages when conversation changes
   useEffect(() => {
     loadMessages(conversationId).catch(() => {
       toast.error('خطا در بارگذاری پیام‌ها');
     });
     setHasMore(true);
     setReplyTo(null);
-    joinRef.current(conversationId);
-    return () => {
-      leaveRef.current(conversationId);
-    };
   }, [conversationId, loadMessages]);
 
   // Scroll to bottom on new messages

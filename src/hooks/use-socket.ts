@@ -4,6 +4,7 @@ import { useEffect, useRef, useState } from 'react';
 import { io, Socket } from 'socket.io-client';
 import { useAuthStore } from '@/store/auth';
 import { useChatStore } from '@/store/chat';
+import { usePollingFallback } from './use-polling-fallback';
 
 interface UseSocketResult {
   isConnected: boolean;
@@ -56,6 +57,10 @@ export function useSocket(): UseSocketResult {
   const user = useAuthStore((s) => s.user);
   const [isConnected, setIsConnected] = useState(false);
   const socketRef = useRef<Socket | null>(null);
+  const setWsConnected = useChatStore((s) => s.setWsConnected);
+
+  // Always run the polling fallback (it's a no-op when WS is connected and recent)
+  usePollingFallback();
 
   const onMessageNew = useChatStore((s) => s.onMessageNew);
   const onMessageDeleted = useChatStore((s) => s.onMessageDeleted);
@@ -119,14 +124,17 @@ export function useSocket(): UseSocketResult {
     socket.on('connect', () => {
       console.log('[ws] connected');
       setIsConnected(true);
+      setWsConnected(true);
     });
     socket.on('disconnect', () => {
       console.log('[ws] disconnected');
       setIsConnected(false);
+      setWsConnected(false);
     });
     socket.on('connect_error', (err) => {
       console.warn('[ws] connect error:', err.message);
       setIsConnected(false);
+      setWsConnected(false);
     });
 
     socket.on('message:new', (data: { message: Parameters<typeof onMessageNew>[0] }) => {
@@ -167,24 +175,35 @@ export function useSocket(): UseSocketResult {
   }, [user, onMessageNew, onMessageDeleted, onReceiptUpdate, onTyping, onPresence]);
 
   const joinConversation = (conversationId: string) => {
-    const s = socketRef.current;
+    const s = socketRef.current ?? socketSingleton;
     if (s) s.emit('conversation:join', { conversationId });
   };
 
   const leaveConversation = (conversationId: string) => {
-    const s = socketRef.current;
+    const s = socketRef.current ?? socketSingleton;
     if (s) s.emit('conversation:leave', { conversationId });
   };
 
   const emitTyping = (conversationId: string, isTyping: boolean) => {
-    const s = socketRef.current;
+    const s = socketRef.current ?? socketSingleton;
     if (s) s.emit(isTyping ? 'typing:start' : 'typing:stop', { conversationId });
   };
 
   const emitRead = (messageId: string, conversationId: string) => {
-    const s = socketRef.current;
+    const s = socketRef.current ?? socketSingleton;
     if (s) s.emit('message:read', { messageId, conversationId });
   };
 
   return { isConnected, joinConversation, leaveConversation, emitTyping, emitRead };
+}
+
+/**
+ * Standalone helper to emit typing events without using the useSocket hook.
+ * Useful in components that don't need the full socket lifecycle but just
+ * want to emit typing indicators.
+ */
+export function emitTypingEvent(conversationId: string, isTyping: boolean) {
+  if (socketSingleton) {
+    socketSingleton.emit(isTyping ? 'typing:start' : 'typing:stop', { conversationId });
+  }
 }

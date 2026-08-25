@@ -80,21 +80,48 @@ const httpServer = createServer(async (req: IncomingMessage, res: ServerResponse
     try {
       const payload = JSON.parse(body);
       if (req.url === '/emit') {
-        io.to(`conv:${payload.conversationId}`).emit(payload.event, payload.data);
+        // IMPORTANT: For 'message:new' events, the sender already received
+        // the message via the HTTP POST response, so we must EXCLUDE them.
+        // For other events (typing, read receipts), broadcast to the room.
+        if (payload.event === 'message:new' && payload.data?.message?.senderId) {
+          const senderId = payload.data.message.senderId;
+          // Find sockets of the sender and emit to everyone EXCEPT them
+          const roomSockets = await io.in(`conv:${payload.conversationId}`).fetchSockets();
+          for (const s of roomSockets) {
+            const sUser = (s.data as { user?: ClientInfo }).user;
+            if (sUser && sUser.userId === senderId) continue;
+            io.to(s.id).emit(payload.event, payload.data);
+          }
+        } else {
+          io.to(`conv:${payload.conversationId}`).emit(payload.event, payload.data);
+        }
       } else {
         io.emit(payload.event, payload.data);
       }
       res.writeHead(200, { 'Content-Type': 'application/json' });
-      res.end(JSON.stringify({ ok: true }));
+      res.end(JSON.stringify({ ok: true, delivered: true }));
     } catch (err) {
       res.writeHead(400, { 'Content-Type': 'application/json' });
-      res.end(JSON.stringify({ error: 'invalid payload' }));
+      res.end(JSON.stringify({ error: 'invalid payload', detail: String(err) }));
     }
     return;
   }
   if (req.method === 'GET' && req.url === '/health') {
     res.writeHead(200, { 'Content-Type': 'application/json' });
-    res.end(JSON.stringify({ ok: true, uptime: process.uptime(), connections: io.sockets.sockets.size }));
+    res.end(JSON.stringify({
+      ok: true,
+      uptime: process.uptime(),
+      connections: io.sockets.sockets.size,
+      timestamp: new Date().toISOString(),
+    }));
+    return;
+  }
+  // Endpoint to check if a user is currently connected (for client presence)
+  if (req.method === 'GET' && req.url?.startsWith('/presence/')) {
+    const userId = req.url.slice('/presence/'.length);
+    const isOnline = onlineUsers.has(userId) && (onlineUsers.get(userId)?.size ?? 0) > 0;
+    res.writeHead(200, { 'Content-Type': 'application/json' });
+    res.end(JSON.stringify({ userId, isOnline }));
     return;
   }
   res.writeHead(404, { 'Content-Type': 'application/json' });

@@ -7,10 +7,15 @@ import { AuthScreen } from '@/features/auth/auth-screen';
 import { ChatScreen } from '@/features/chat/chat-screen';
 import { AdminScreen } from '@/features/admin/admin-screen';
 import { Loader2 } from 'lucide-react';
+import { useSocket } from '@/hooks/use-socket';
 
 export function AppShell() {
   const { user, initialized, loading, init } = useAuthStore();
   const { route, push } = useRouter();
+
+  // Initialize the WebSocket connection + polling fallback for all authenticated users.
+  // This must be called at the top level (not in ChatScreen) so it persists across view changes.
+  useSocket();
 
   useEffect(() => {
     if (!initialized) {

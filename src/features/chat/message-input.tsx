@@ -5,7 +5,7 @@ import { Button } from '@/components/ui/button';
 import { Input } from '@/components/ui/input';
 import { Paperclip, Send, Smile, X, Loader2, FileText, Trash2 } from 'lucide-react';
 import { useChatStore } from '@/store/chat';
-import { useSocket } from '@/hooks/use-socket';
+import { emitTypingEvent } from '@/hooks/use-socket';
 import { toast } from 'sonner';
 import { formatBytes, toPersianDigits, api, ApiError } from '@/lib/api';
 import { cn } from '@/lib/utils';
@@ -37,8 +37,12 @@ export function MessageInput({ conversationId, replyTo, onCancelReply }: Message
   const [isTyping, setIsTyping] = useState(false);
   const fileInputRef = useRef<HTMLInputElement>(null);
   const typingTimer = useRef<ReturnType<typeof setTimeout> | null>(null);
-  const { sendMessage, deleteMessage } = useChatStore();
-  const { emitTyping } = useSocket();
+  const sendMessage = useChatStore((s) => s.sendMessage);
+  const deleteMessage = useChatStore((s) => s.deleteMessage);
+
+  const emitTyping = useCallback((convId: string, typing: boolean) => {
+    emitTypingEvent(convId, typing);
+  }, []);
 
   // Cleanup typing indicator when unmounting
   useEffect(() => {

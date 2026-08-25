@@ -5,16 +5,12 @@ import { useChatStore } from '@/store/chat';
 import { useRouter } from '@/lib/router';
 import { ConversationList } from '@/features/chat/conversation-list';
 import { ChatWindow } from '@/features/chat/chat-window';
-import { useSocket } from '@/hooks/use-socket';
 import { MessageCircle } from 'lucide-react';
-import { Button } from '@/components/ui/button';
-import { useAuthStore } from '@/store/auth';
 import { toast } from 'sonner';
 
 export function ChatScreen() {
   const { route, push } = useRouter();
-  const { selectConversation, activeConversationId, loadConversations } = useChatStore();
-  const { isConnected } = useSocket();
+  const { selectConversation, loadConversations, wsConnected } = useChatStore();
 
   const conversationId =
     route.name === 'chat' ? route.conversationId : undefined;
@@ -32,20 +28,19 @@ export function ChatScreen() {
     });
   }, [loadConversations]);
 
-  const isMobile = typeof window !== 'undefined' && window.innerWidth < 768;
   const showChatOnMobile = !!conversationId;
   const showListOnMobile = !conversationId;
 
   return (
     <div className="flex h-screen bg-background">
-      {/* Connection indicator */}
-      {!isConnected && (
+      {/* Connection indicator (only show if WS is disconnected) */}
+      {!wsConnected && (
         <div className="fixed top-2 left-1/2 -translate-x-1/2 z-50 bg-amber-500 text-white text-xs px-3 py-1 rounded-full shadow-lg">
-          در حال اتصال مجدد...
+          حالت پشتیبان (پولینگ) — پیام‌ها هر چند ثانیه همگام می‌شوند
         </div>
       )}
 
-      {/* Conversation list - desktop: always visible, mobile: only when no chat selected */}
+      {/* Conversation list */}
       <div
         className={`${
           showListOnMobile ? 'flex' : 'hidden'
@@ -54,7 +49,7 @@ export function ChatScreen() {
         <ConversationList />
       </div>
 
-      {/* Chat window - desktop: always visible, mobile: only when conversation selected */}
+      {/* Chat window */}
       <div
         className={`${
           showChatOnMobile ? 'flex' : 'hidden'

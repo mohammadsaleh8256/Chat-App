@@ -12,6 +12,9 @@ interface ChatState {
   loadingMessages: boolean;
   typing: Record<string, Record<string, boolean>>; // conversationId -> userId -> isTyping
   presence: Record<string, { isOnline: boolean; lastSeenAt: string }>; // userId -> presence
+  // Track the last server time we've synced messages up to (for polling)
+  lastSyncTimes: Record<string, string>; // conversationId -> ISO timestamp
+  wsConnected: boolean;
 
   loadConversations: () => Promise<void>;
   selectConversation: (id: string | null) => void;
@@ -20,6 +23,12 @@ interface ChatState {
   sendMessage: (conversationId: string, body: string, opts?: { replyToId?: string; attachmentIds?: string[] }) => Promise<void>;
   deleteMessage: (messageId: string) => Promise<void>;
   startConversationWith: (userId: string) => Promise<string>;
+
+  // Polling fallback: fetch new messages since last sync time
+  pollNewMessages: (conversationId: string) => Promise<void>;
+
+  // Set WS connection state (used by use-socket hook)
+  setWsConnected: (connected: boolean) => void;
 
   // WS event handlers
   onMessageNew: (msg: ChatMessage) => void;
@@ -40,6 +49,8 @@ export const useChatStore = create<ChatState>((set, get) => ({
   loadingMessages: false,
   typing: {},
   presence: {},
+  lastSyncTimes: {},
+  wsConnected: false,
 
   loadConversations: async () => {
     set({ loadingConversations: true });
@@ -60,8 +71,15 @@ export const useChatStore = create<ChatState>((set, get) => ({
       const data = await api<{ messages: ChatMessage[]; nextCursor: string | null }>(
         `/api/conversations/${conversationId}/messages?limit=30`
       );
+      // Track the latest message timestamp for polling fallback
+      const msgs = data.messages.reverse();
+      const lastMsg = msgs[msgs.length - 1];
+      const lastSyncTime = lastMsg
+        ? lastMsg.createdAt
+        : new Date().toISOString();
       set((state) => ({
-        messages: { ...state.messages, [conversationId]: data.messages.reverse() },
+        messages: { ...state.messages, [conversationId]: msgs },
+        lastSyncTimes: { ...state.lastSyncTimes, [conversationId]: lastSyncTime },
         loadingMessages: false,
       }));
     } catch (err) {
@@ -123,6 +141,74 @@ export const useChatStore = create<ChatState>((set, get) => ({
     return res.conversation.id;
   },
 
+  pollNewMessages: async (conversationId) => {
+    const state = get();
+    const since = state.lastSyncTimes[conversationId];
+    if (!since) {
+      // Never loaded this conversation; skip (loadMessages should be called first)
+      return;
+    }
+    try {
+      const data = await api<{
+        messages: ChatMessage[];
+        deletedMessageIds: string[];
+        serverTime: string;
+      }>(`/api/conversations/${conversationId}/messages/since?since=${encodeURIComponent(since)}`);
+
+      set((s) => {
+        const existing = s.messages[conversationId] || [];
+        const newMsgs = data.messages.filter(
+          (m) => !existing.some((e) => e.id === m.id)
+        );
+        const filtered = existing.filter(
+          (m) => !data.deletedMessageIds.includes(m.id)
+        );
+        return {
+          messages: {
+            ...s.messages,
+            [conversationId]: [...filtered, ...newMsgs],
+          },
+          lastSyncTimes: {
+            ...s.lastSyncTimes,
+            [conversationId]: data.serverTime,
+          },
+        };
+      });
+
+      // Update conversation list for any new messages (lastMessage + unread)
+      if (data.messages.length > 0) {
+        const latest = data.messages[data.messages.length - 1];
+        set((s) => ({
+          conversations: s.conversations.map((c) =>
+            c.id === conversationId
+              ? {
+                  ...c,
+                  lastMessage: {
+                    id: latest.id,
+                    body: latest.body || (latest.attachments.length > 0 ? '📎 فایل' : ''),
+                    type: latest.type,
+                    senderName: latest.senderName,
+                    createdAt: latest.createdAt,
+                    isOwn: latest.isOwn,
+                  },
+                  updatedAt: latest.createdAt,
+                  unreadCount:
+                    s.activeConversationId === conversationId
+                      ? 0
+                      : c.unreadCount + (latest.isOwn ? 0 : 1),
+                }
+              : c
+          ),
+        }));
+      }
+    } catch (err) {
+      // Silent fail; polling will retry
+      console.warn('[poll] failed:', err);
+    }
+  },
+
+  setWsConnected: (connected) => set({ wsConnected: connected }),
+
   onMessageNew: (msg) => {
     set((state) => {
       const existing = state.messages[msg.conversationId] || [];
@@ -131,6 +217,13 @@ export const useChatStore = create<ChatState>((set, get) => ({
         messages: { ...state.messages, [msg.conversationId]: [...existing, msg] },
       };
     });
+    // Update lastSyncTime to track this message
+    set((state) => ({
+      lastSyncTimes: {
+        ...state.lastSyncTimes,
+        [msg.conversationId]: msg.createdAt,
+      },
+    }));
     // Update lastMessage in conversation list
     set((state) => ({
       conversations: state.conversations.map((c) =>
@@ -244,5 +337,7 @@ export const useChatStore = create<ChatState>((set, get) => ({
     messages: {},
     typing: {},
     presence: {},
+    lastSyncTimes: {},
+    wsConnected: false,
   }),
 }));
