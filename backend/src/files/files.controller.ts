@@ -6,14 +6,13 @@ import {
   Post,
   Req,
   UseGuards,
-  UseInterceptors,
   HttpCode,
   HttpStatus,
   Res,
 } from '@nestjs/common';
-import { FileFieldsInterceptor } from '@nestjs/platform-express';
 import { ApiTags, ApiBearerAuth, ApiOperation, ApiConsumes, ApiBody } from '@nestjs/swagger';
-import { Response } from 'express';
+import { Response, Request } from 'express';
+import { Readable } from 'stream';
 import { FilesService } from './services/files.service';
 import { JwtAuthGuard } from '../auth/guards/jwt-auth.guard';
 import { CurrentUser, CurrentUserPayload } from '../common/decorators/current-user.decorator';
@@ -33,20 +32,29 @@ export class FilesController {
     return this.files.initUpload(user.id, dto);
   }
 
+  /**
+   * Upload a single chunk.
+   * Reads the raw binary body from the request stream directly — no multer, no body parsing.
+   * The body must be the chunk bytes with Content-Type: application/octet-stream.
+   */
   @Post('upload/:uploadId/chunk/:index')
   @HttpCode(HttpStatus.OK)
   @ApiOperation({ summary: 'Upload a single chunk' })
   @ApiConsumes('application/octet-stream')
   @ApiBody({ schema: { type: 'string', format: 'binary' } })
-  @UseInterceptors(FileFieldsInterceptor([]))
   async uploadChunk(
     @CurrentUser() user: CurrentUserPayload,
     @Param('uploadId') uploadId: string,
     @Param('index') index: string,
-    @Req() req: any,
+    @Req() req: Request,
   ) {
     const chunkIndex = parseInt(index, 10);
-    return this.files.uploadChunk(user.id, uploadId, chunkIndex, req);
+    if (Number.isNaN(chunkIndex)) {
+      return { statusCode: 400, message: 'chunk index must be a number' };
+    }
+    // Convert Express request (IncomingMessage) into a Node Readable stream.
+    const stream = Readable.from(req as unknown as NodeJS.ReadableStream);
+    return this.files.uploadChunk(user.id, uploadId, chunkIndex, stream);
   }
 
   @Post('upload/:uploadId/complete')
@@ -87,7 +95,7 @@ export class FilesController {
     res.setHeader('Content-Disposition', `attachment; filename*=UTF-8''${safeName}`);
 
     const stream = this.files.openReadStream(attachment.storageKey);
-    return new Promise((resolve, reject) => {
+    return new Promise<void>((resolve, reject) => {
       stream.on('error', reject);
       stream.on('end', resolve);
       stream.pipe(res);

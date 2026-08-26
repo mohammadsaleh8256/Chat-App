@@ -3,6 +3,7 @@ import { JwtModule } from '@nestjs/jwt';
 import { ConfigModule, ConfigService } from '@nestjs/config';
 import { ChatGateway } from './chat.gateway';
 import { PresenceService } from './presence.service';
+import { ChatEvents } from '../events/chat-events';
 
 @Global()
 @Module({
@@ -15,7 +16,7 @@ import { PresenceService } from './presence.service';
       }),
     }),
   ],
-  providers: [ChatGateway, PresenceService],
-  exports: [PresenceService, JwtModule],
+  providers: [ChatGateway, PresenceService, ChatEvents],
+  exports: [PresenceService, JwtModule, ChatEvents],
 })
 export class ChatGatewayModule {}

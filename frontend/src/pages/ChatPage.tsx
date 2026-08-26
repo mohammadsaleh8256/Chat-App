@@ -3,12 +3,13 @@ import { useNavigate } from 'react-router-dom';
 import api from '../services/api';
 import { chatSocket } from '../services/socket';
 import { useAuthStore } from '../stores/auth.store';
-import type { Conversation, Message, UserSummary, User } from '../types';
-import { Avatar } from '../components/Avatar';
+import type { Conversation, User } from '../types';
 import { ConversationList } from '../components/ConversationList';
 import { ChatWindow } from '../components/ChatWindow';
-import { formatPhone, relativeTime } from '../utils';
-import { MessageSquarePlus, Search, Shield, LogOut } from 'lucide-react';
+import { AnimatePresence, motion } from 'framer-motion';
+import { formatPhone } from '../utils';
+import { MessageSquarePlus, Shield, LogOut, Search } from 'lucide-react';
+import { Avatar } from '../components/Avatar';
 
 export default function ChatPage() {
   const { user, logout } = useAuthStore();
@@ -19,23 +20,50 @@ export default function ChatPage() {
   const [loading, setLoading] = useState(true);
   const [selected, setSelected] = useState<Conversation | null>(null);
   const [mobileShowChat, setMobileShowChat] = useState(false);
+  const refreshTimerRef = useRef<any>(null);
 
   const loadConversations = useCallback(async () => {
     try {
       const { data } = await api.get<{ items: Conversation[] }>('/conversations');
-      setConversations(data.items);
-      setFiltered(data.items);
+      // Deduplicate by id (safety against any backend duplication bug)
+      const seen = new Set<string>();
+      const unique = data.items.filter((c) => {
+        if (seen.has(c.id)) return false;
+        seen.add(c.id);
+        return true;
+      });
+      setConversations(unique);
+      // Preserve selected conversation reference (re-load its data so unread count etc. update)
+      if (selected) {
+        const updated = unique.find((c) => c.id === selected.id);
+        if (updated && updated !== selected) {
+          // If user is currently viewing this conversation, keep unread at 0
+          setSelected({ ...updated, unreadCount: 0 });
+        }
+      }
     } catch {} finally { setLoading(false); }
-  }, []);
+  }, [selected]);
 
   useEffect(() => {
     loadConversations();
+    // Connect socket if not already connected
+    chatSocket.connect();
+
     // Subscribe to socket events for conversation updates
-    const off1 = chatSocket.on('message:receive', () => loadConversations());
-    const off2 = chatSocket.on('user:online', () => loadConversations());
-    const off3 = chatSocket.on('user:offline', () => loadConversations());
-    const timer = setInterval(loadConversations, 30_000);
-    return () => { off1(); off2(); off3(); clearInterval(timer); };
+    const offReceive = chatSocket.on('message:receive', () => loadConversations());
+    const offConvUpdated = chatSocket.on('conversation:updated', () => loadConversations());
+    const offOnline = chatSocket.on('user:online', () => loadConversations());
+    const offOffline = chatSocket.on('user:offline', () => loadConversations());
+
+    // Periodic refresh as a safety net
+    refreshTimerRef.current = setInterval(loadConversations, 30_000);
+    return () => {
+      offReceive();
+      offConvUpdated();
+      offOnline();
+      offOffline();
+      if (refreshTimerRef.current) clearInterval(refreshTimerRef.current);
+    };
   }, [loadConversations]);
 
   useEffect(() => {
@@ -65,7 +93,7 @@ export default function ChatPage() {
 
   return (
     <div className="flex h-full w-full">
-      {/* Sidebar - shows on desktop OR when no chat selected on mobile */}
+      {/* Sidebar */}
       <aside className={`w-full md:w-80 flex flex-col bg-white dark:bg-gray-800 border-l dark:border-gray-700 ${mobileShowChat && selected ? 'hidden md:flex' : 'flex'}`}>
         <div className="bg-primary text-white p-3 flex items-center justify-between gap-2">
           <div className="flex items-center gap-3 min-w-0">
@@ -98,7 +126,7 @@ export default function ChatPage() {
               value={search}
               onChange={(e) => setSearch(e.target.value)}
               placeholder="جستجوی گفتگوها..."
-              className="w-full pr-9 pl-3 py-2 bg-gray-100 dark:bg-gray-700 rounded-full text-sm focus:outline-none focus:ring-2 focus:ring-accent"
+              className="w-full pr-9 pl-3 py-2 bg-gray-100 dark:bg-gray-700 rounded-full text-sm focus:outline-none focus:ring-2 focus:ring-accent text-gray-900 dark:text-gray-100"
             />
           </div>
         </div>
@@ -113,23 +141,32 @@ export default function ChatPage() {
 
       {/* Chat Window */}
       <main className={`flex-1 flex flex-col overflow-hidden ${!mobileShowChat || !selected ? 'hidden md:flex' : 'flex'}`}>
-        {selected ? (
-          <ChatWindow
-            conversation={selected}
-            currentUser={user!}
-            onBack={() => { setMobileShowChat(false); setSelected(null); }}
-          />
-        ) : (
-          <div className="flex-1 flex flex-col items-center justify-center text-center p-8 chat-bg">
-            <div className="text-gray-400 mb-3">
-              <svg width="80" height="80" viewBox="0 0 24 24" fill="currentColor" opacity="0.3">
-                <path d="M12 2C6.5 2 2 6 2 11c0 1.8.6 3.5 1.6 5L2 22l6-1.6c1.5.7 3 1 4.5 1 5.5 0 10-4 10-9S17.5 2 12 2z" />
-              </svg>
-            </div>
-            <h2 className="text-xl font-semibold text-gray-700 dark:text-gray-300 mb-2">گفتگویی انتخاب نشده</h2>
-            <p className="text-sm text-gray-500 max-w-xs">برای شروع یک گفتگوی جدید روی دکمه + بزنید یا از لیست گفتگوها یکی را انتخاب کنید.</p>
-          </div>
-        )}
+        <AnimatePresence mode="wait">
+          {selected ? (
+            <ChatWindow
+              key={selected.id}
+              conversation={selected}
+              currentUser={user!}
+              onBack={() => { setMobileShowChat(false); setSelected(null); }}
+            />
+          ) : (
+            <motion.div
+              key="empty"
+              className="flex-1 flex flex-col items-center justify-center text-center p-8 chat-bg"
+              initial={{ opacity: 0 }}
+              animate={{ opacity: 1 }}
+              exit={{ opacity: 0 }}
+            >
+              <div className="text-gray-400 mb-3">
+                <svg width="80" height="80" viewBox="0 0 24 24" fill="currentColor" opacity="0.3">
+                  <path d="M12 2C6.5 2 2 6 2 11c0 1.8.6 3.5 1.6 5L2 22l6-1.6c1.5.7 3 1 4.5 1 5.5 0 10-4 10-9S17.5 2 12 2z" />
+                </svg>
+              </div>
+              <h2 className="text-xl font-semibold text-gray-700 dark:text-gray-300 mb-2">گفتگویی انتخاب نشده</h2>
+              <p className="text-sm text-gray-500 max-w-xs">برای شروع یک گفتگوی جدید روی دکمه + بزنید یا از لیست گفتگوها یکی را انتخاب کنید.</p>
+            </motion.div>
+          )}
+        </AnimatePresence>
       </main>
     </div>
   );

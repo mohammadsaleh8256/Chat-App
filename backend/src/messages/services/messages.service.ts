@@ -1,6 +1,7 @@
-import { Injectable, NotFoundException, ForbiddenException, BadRequestException } from '@nestjs/common';
+import { Injectable, NotFoundException, ForbiddenException, BadRequestException, Logger } from '@nestjs/common';
 import { PrismaService } from '../../prisma/prisma.service';
 import { ConversationsService } from '../../conversations/services/conversations.service';
+import { ChatEvents } from '../../common/events/chat-events';
 import { SendMessageDto, ListMessagesQueryDto, MessagesBeforeQueryDto, ForwardMessageDto } from '../dto/message.dto';
 
 const ALLOWED_TYPES = ['TEXT', 'IMAGE', 'VIDEO', 'AUDIO', 'FILE'];
@@ -8,9 +9,12 @@ const MAX_CONTENT_LENGTH = 8000;
 
 @Injectable()
 export class MessagesService {
+  private readonly logger = new Logger('MessagesService');
+
   constructor(
     private readonly prisma: PrismaService,
     private readonly conversations: ConversationsService,
+    private readonly chatEvents: ChatEvents,
   ) {}
 
   async sendText(senderId: string, conversationId: string, dto: SendMessageDto) {
@@ -39,6 +43,13 @@ export class MessagesService {
     });
 
     await this.conversations.updateLastMessage(conversationId, dto.content, now);
+
+    // Notify all members (including the sender's other devices) that the conversation was updated
+    this.chatEvents.emitConversationUpdated(conversationId, {
+      messageId: msg.id,
+      senderId,
+      lastMessagePreview: dto.content,
+    });
 
     return this.toDto(msg, senderId);
   }
@@ -76,6 +87,12 @@ export class MessagesService {
     });
 
     await this.conversations.updateLastMessage(conversationId, `📎 ${attachment.originalFileName}`, now);
+
+    this.chatEvents.emitConversationUpdated(conversationId, {
+      messageId: msg.id,
+      senderId,
+      lastMessagePreview: `📎 ${attachment.originalFileName}`,
+    });
 
     return this.toDto(msg, senderId);
   }
@@ -211,6 +228,12 @@ export class MessagesService {
       orig.content || `📎 ${orig.attachments[0]?.originalFileName || 'فایل'}`,
       now,
     );
+
+    this.chatEvents.emitConversationUpdated(dto.targetConversationId, {
+      messageId: msg.id,
+      senderId: userId,
+      lastMessagePreview: orig.content || `📎 ${orig.attachments[0]?.originalFileName || 'فایل'}`,
+    });
 
     return this.toDto(msg, userId);
   }

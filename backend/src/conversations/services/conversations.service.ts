@@ -1,10 +1,14 @@
 import { Injectable, NotFoundException, BadRequestException, ForbiddenException } from '@nestjs/common';
 import { PrismaService } from '../../prisma/prisma.service';
+import { ChatEvents } from '../../common/events/chat-events';
 import { CreateConversationDto, ListConversationsQueryDto } from '../dto/conversation.dto';
 
 @Injectable()
 export class ConversationsService {
-  constructor(private readonly prisma: PrismaService) {}
+  constructor(
+    private readonly prisma: PrismaService,
+    private readonly chatEvents: ChatEvents,
+  ) {}
 
   async createOrGet(currentUserId: string, otherUserId: string) {
     if (currentUserId === otherUserId)
@@ -13,18 +17,25 @@ export class ConversationsService {
     const other = await this.prisma.user.findUnique({ where: { id: otherUserId } });
     if (!other || other.deletedAt) throw new NotFoundException('کاربر مقابل یافت نشد.');
 
-    // Find existing private conversation between these two users
-    const existing = await this.prisma.conversation.findFirst({
+    // Find existing private conversation between these two users.
+    // We first fetch all private conversations the current user is in, then
+    // filter on the backend for ones that also contain the other user.
+    // This avoids the Prisma `some` ambiguity where two separate `some` clauses
+    // can match conversations where ONE user is a member of two different conversations.
+    const myConversations = await this.prisma.conversation.findMany({
       where: {
-        AND: [
-          { isGroup: false },
-          { deletedAt: null },
-          { participants: { some: { userId: currentUserId } } },
-          { participants: { some: { userId: otherUserId } } },
-        ],
+        isGroup: false,
+        deletedAt: null,
+        participants: {
+          some: { userId: currentUserId, leftAt: null },
+        },
       },
       include: { participants: { include: { user: true } } },
     });
+
+    const existing = myConversations.find((c) =>
+      c.participants.some((p) => p.userId === otherUserId && p.leftAt === null)
+    );
 
     if (existing) {
       return this.toDto(existing, currentUserId);

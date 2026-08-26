@@ -1,5 +1,3 @@
-import { cn, formatPhone } from '../utils';
-
 interface AvatarProps {
   name?: string;
   url?: string | null;
@@ -25,25 +23,34 @@ function colorForName(name: string): string {
 
 export function Avatar({ name = '', url, size = 40, isOnline = false, showStatus = false }: AvatarProps) {
   const fontSize = Math.floor(size * 0.4);
+  const dotSize = Math.max(8, Math.floor(size * 0.28));
   return (
     <div
-      className="relative flex-shrink-0 rounded-full overflow-hidden inline-flex"
+      className="relative flex-shrink-0 inline-flex"
       style={{ width: size, height: size }}
     >
-      {url ? (
-        <img src={url} alt={name} className="w-full h-full object-cover" />
-      ) : (
-        <div
-          className="w-full h-full flex items-center justify-center text-white font-semibold"
-          style={{ backgroundColor: colorForName(name), fontSize }}
-        >
-          {getInitials(name)}
-        </div>
-      )}
+      <div
+        className="w-full h-full rounded-full overflow-hidden flex items-center justify-center"
+        style={{ backgroundColor: url ? 'transparent' : colorForName(name) }}
+      >
+        {url ? (
+          <img src={url} alt={name} className="w-full h-full object-cover" />
+        ) : (
+          <span className="text-white font-semibold" style={{ fontSize }}>
+            {getInitials(name)}
+          </span>
+        )}
+      </div>
       {showStatus && isOnline && (
         <span
-          className="absolute bottom-0 left-0 w-1/3 h-1/3 rounded-full border-2 border-white bg-[#25d366]"
-          style={{ minWidth: 8, minHeight: 8 }}
+          className="absolute rounded-full bg-[#25d366] border-2 border-white dark:border-gray-800"
+          style={{
+            width: dotSize,
+            height: dotSize,
+            bottom: -2,
+            left: -2,
+            boxShadow: '0 0 0 1px rgba(0,0,0,0.1)',
+          }}
         />
       )}
     </div>

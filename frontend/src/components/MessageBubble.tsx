@@ -31,7 +31,7 @@ export function MessageBubble({ message, isMine }: Props) {
   }
 
   return (
-    <div className={`flex ${isMine ? 'justify-end' : 'justify-start'} my-0.5 animate-fade-in`}>
+    <div className={`flex ${isMine ? 'justify-end' : 'justify-start'} my-0.5`}>
       <div className={`max-w-[75%] px-3 py-1.5 rounded-lg shadow-sm ${
         isMine ? 'bg-[#dcf8c6] dark:bg-[#005c4b] dark:text-white' : 'bg-white dark:bg-[#202c33] dark:text-gray-100'
       }`}>
@@ -67,7 +67,6 @@ export function MessageBubble({ message, isMine }: Props) {
 }
 
 function AttachmentView({ attachment }: { attachment: Message['attachments'][0] }) {
-  const [showControls, setShowControls] = useState(false);
   const size = parseInt(attachment.size, 10);
   const mimeType = attachment.mimeType;
 

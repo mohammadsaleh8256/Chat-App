@@ -13,6 +13,7 @@ import { ConfigService } from '@nestjs/config';
 import { Server, Socket } from 'socket.io';
 import { PrismaService } from '../../prisma/prisma.service';
 import { PresenceService } from './presence.service';
+import { ChatEvents } from '../events/chat-events';
 import { JwtService } from '@nestjs/jwt';
 
 interface SocketUser {
@@ -38,10 +39,13 @@ export class ChatGateway implements OnGatewayInit, OnGatewayConnection, OnGatewa
     private readonly presence: PresenceService,
     private readonly jwt: JwtService,
     private readonly config: ConfigService,
+    private readonly chatEvents: ChatEvents,
   ) {}
 
   afterInit() {
     this.logger.log('Socket.IO gateway initialized at /');
+    // Wire the server into the ChatEvents bus so services can emit events
+    this.chatEvents.setServer(this.server);
   }
 
   /**
@@ -84,12 +88,10 @@ export class ChatGateway implements OnGatewayInit, OnGatewayConnection, OnGatewa
         await client.join(this.roomName(conversationId));
       }
 
-      const wentOnline = await this.presence.userConnected(user.id, client.id);
-      if (wentOnline) {
-        // Notify all conversations the user is in that they are now online
-        for (const { conversationId } of conversations) {
-          this.server.to(this.roomName(conversationId)).emit('user:online', { userId: user.id });
-        }
+      const wasOffline = await this.presence.userConnected(user.id, client.id);
+      if (wasOffline) {
+        // Broadcast presence to everyone — clients will filter for relevant conversations
+        this.chatEvents.emitPresence(user.id, true);
       }
 
       this.logger.log(`Connected: ${user.phoneNumber} (${client.id})`);
@@ -105,13 +107,7 @@ export class ChatGateway implements OnGatewayInit, OnGatewayConnection, OnGatewa
     if (!user) return;
     const wentOffline = await this.presence.userDisconnected(user.userId, client.id);
     if (wentOffline) {
-      const conversations = await this.prisma.conversationParticipant.findMany({
-        where: { userId: user.userId, leftAt: null },
-        select: { conversationId: true },
-      });
-      for (const { conversationId } of conversations) {
-        this.server.to(this.roomName(conversationId)).emit('user:offline', { userId: user.userId });
-      }
+      this.chatEvents.emitPresence(user.userId, false);
     }
     this.logger.log(`Disconnected: ${user.phoneNumber} (${client.id})`);
   }
@@ -176,9 +172,14 @@ export class ChatGateway implements OnGatewayInit, OnGatewayConnection, OnGatewa
       where: { conversationId: data.conversationId, userId: user.userId, leftAt: null },
     });
     if (!isMember) return;
-    // Broadcast to other members of the conversation (excluding sender)
+    // Broadcast to other members of the conversation (excluding sender's own socket)
     client.to(this.roomName(data.conversationId)).emit('message:receive', {
       conversationId: data.conversationId,
+      messageId: data.messageId,
+      senderId: user.userId,
+    });
+    // Also notify conversation:updated so the conversation list reorders
+    this.chatEvents.emitConversationUpdated(data.conversationId, {
       messageId: data.messageId,
       senderId: user.userId,
     });

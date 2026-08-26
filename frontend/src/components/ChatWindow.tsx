@@ -1,4 +1,5 @@
 import { useEffect, useRef, useState, useCallback } from 'react';
+import { motion, AnimatePresence } from 'framer-motion';
 import api from '../services/api';
 import { chatSocket } from '../services/socket';
 import { uploadFile, type UploadProgress } from '../services/uploader';
@@ -6,7 +7,7 @@ import toast from 'react-hot-toast';
 import type { Conversation, Message, User } from '../types';
 import { Avatar } from './Avatar';
 import { MessageBubble } from './MessageBubble';
-import { formatPhone, relativeTime } from '../utils';
+import { relativeTime } from '../utils';
 import { ArrowRight, Paperclip, Send, X } from 'lucide-react';
 
 interface Props {
@@ -32,6 +33,11 @@ export function ChatWindow({ conversation, currentUser, onBack }: Props) {
   const containerRef = useRef<HTMLDivElement>(null);
   const typingTimerRef = useRef<any>(null);
   const stopTypingTimerRef = useRef<any>(null);
+  const shouldScrollRef = useRef(true);
+
+  const scrollToBottom = useCallback((smooth = true) => {
+    messagesEndRef.current?.scrollIntoView({ behavior: smooth ? 'smooth' : 'auto' });
+  }, []);
 
   const loadMessages = useCallback(async () => {
     setLoading(true);
@@ -39,17 +45,20 @@ export function ChatWindow({ conversation, currentUser, onBack }: Props) {
       const { data } = await api.get<{ items: Message[] }>(`/conversations/${conversation.id}/messages`, {
         params: { page: 1, pageSize: PAGE_SIZE },
       });
-      setMessages(data.items);
-      if (data.items.length > 0) {
-        const oldest = data.items.reduce((min, m) => m.createdAt < min ? m.createdAt : min, data.items[0].createdAt);
+      // API returns newest-first. We want oldest-first for display, so reverse.
+      // After reverse, index 0 = oldest, last index = newest.
+      const sorted = [...data.items].reverse();
+      setMessages(sorted);
+      if (sorted.length > 0) {
+        const oldest = sorted[0].createdAt;
         setOldestAt(oldest);
         setHasMore(data.items.length >= PAGE_SIZE);
       }
-      setTimeout(() => scrollToBottom(), 100);
       // Mark as delivered
       api.post(`/conversations/${conversation.id}/delivered`).catch(() => {});
+      setTimeout(() => scrollToBottom(false), 100);
     } catch {} finally { setLoading(false); }
-  }, [conversation.id]);
+  }, [conversation.id, scrollToBottom]);
 
   useEffect(() => {
     loadMessages();
@@ -57,17 +66,28 @@ export function ChatWindow({ conversation, currentUser, onBack }: Props) {
 
     const offReceive = chatSocket.on('message:receive', (data: any) => {
       if (data.conversationId !== conversation.id) return;
-      // Fetch latest message
+      // Fetch the new message and append to the end (oldest→newest order)
       api.get<{ items: Message[] }>(`/conversations/${conversation.id}/messages`, { params: { pageSize: 1 } })
         .then(({ data }) => {
           if (data.items.length > 0) {
             const newMsg = data.items[0];
-            setMessages((prev) => prev.some(m => m.id === newMsg.id) ? prev : [...prev, newMsg]);
+            setMessages((prev) => {
+              if (prev.some(m => m.id === newMsg.id)) return prev;
+              return [...prev, newMsg];  // append to end (newest at bottom)
+            });
             chatSocket.emit('message:delivered', { conversationId: conversation.id, messageId: newMsg.id });
             setTimeout(() => scrollToBottom(), 100);
           }
         })
         .catch(() => {});
+    });
+
+    const offConvUpdated = chatSocket.on('conversation:updated', (data: any) => {
+      if (data.conversationId !== conversation.id) return;
+      // A message was sent — fetch it if we don't already have it
+      if (data.messageId && data.senderId !== currentUser.id) {
+        // The message:receive handler will fetch it; no-op here.
+      }
     });
 
     const offTyping = chatSocket.on('typing:start', (data: any) => {
@@ -96,11 +116,22 @@ export function ChatWindow({ conversation, currentUser, onBack }: Props) {
         : m));
     });
 
-    return () => { offReceive(); offTyping(); offStop(); offDelivered(); offRead(); };
-  }, [conversation.id, currentUser.id, loadMessages]);
+    return () => {
+      offReceive();
+      offConvUpdated();
+      offTyping();
+      offStop();
+      offDelivered();
+      offRead();
+    };
+  }, [conversation.id, currentUser.id, loadMessages, scrollToBottom]);
 
-  const scrollToBottom = () => {
-    messagesEndRef.current?.scrollIntoView({ behavior: 'smooth' });
+  // Track whether user is at the bottom (so we know to auto-scroll on new messages)
+  const onScroll = () => {
+    const container = containerRef.current;
+    if (!container) return;
+    const distanceFromBottom = container.scrollHeight - container.scrollTop - container.clientHeight;
+    shouldScrollRef.current = distanceFromBottom < 100;
   };
 
   const loadMore = async () => {
@@ -108,20 +139,23 @@ export function ChatWindow({ conversation, currentUser, onBack }: Props) {
     setLoadingMore(true);
     const container = containerRef.current;
     const prevScrollHeight = container?.scrollHeight || 0;
+    const prevScrollTop = container?.scrollTop || 0;
     try {
       const { data } = await api.get<{ items: Message[] }>(`/conversations/${conversation.id}/messages/before`, {
         params: { before: oldestAt, pageSize: PAGE_SIZE },
       });
       if (data.items.length > 0) {
-        setMessages((prev) => [...data.items, ...prev]);
-        const newOldest = data.items.reduce((min, m) => m.createdAt < min ? m.createdAt : min, data.items[0].createdAt);
+        // API returns newest-first; reverse to oldest-first, then prepend to existing
+        const older = [...data.items].reverse();
+        setMessages((prev) => [...older, ...prev]);
+        const newOldest = older[0].createdAt;
         setOldestAt(newOldest);
         setHasMore(data.items.length >= PAGE_SIZE);
         // Preserve scroll position
         setTimeout(() => {
           if (container) {
             const newScrollHeight = container.scrollHeight;
-            container.scrollTop = newScrollHeight - prevScrollHeight;
+            container.scrollTop = prevScrollTop + (newScrollHeight - prevScrollHeight);
           }
         }, 50);
       } else setHasMore(false);
@@ -146,10 +180,12 @@ export function ChatWindow({ conversation, currentUser, onBack }: Props) {
     const content = text.trim();
     setText('');
     setSending(true);
+    shouldScrollRef.current = true;
     try {
       const { data: msg } = await api.post<Message>(`/conversations/${conversation.id}/messages`, {
         content, type: 'TEXT',
       });
+      // Append to the end (newest at bottom)
       setMessages((prev) => [...prev, msg]);
       chatSocket.emit('message:send', { conversationId: conversation.id, messageId: msg.id });
       setTimeout(() => scrollToBottom(), 50);
@@ -169,6 +205,7 @@ export function ChatWindow({ conversation, currentUser, onBack }: Props) {
     const controller = new AbortController();
     abortRef.current = controller;
     setUploadState({ name: file.name, percent: 0 });
+    shouldScrollRef.current = true;
 
     try {
       const attachmentId = await uploadFile(
@@ -176,9 +213,12 @@ export function ChatWindow({ conversation, currentUser, onBack }: Props) {
         (p: UploadProgress) => setUploadState({ name: file.name, percent: p.percent }),
         controller.signal,
       );
+      const type = file.type.startsWith('image/') ? 'IMAGE'
+        : file.type.startsWith('video/') ? 'VIDEO'
+        : file.type.startsWith('audio/') ? 'AUDIO'
+        : 'FILE';
       const { data: msg } = await api.post<Message>(`/conversations/${conversation.id}/messages`, {
-        content: '', type: file.type.startsWith('image/') ? 'IMAGE' : file.type.startsWith('video/') ? 'VIDEO' : file.type.startsWith('audio/') ? 'AUDIO' : 'FILE',
-        attachmentId,
+        content: '', type, attachmentId,
       });
       setMessages((prev) => [...prev, msg]);
       chatSocket.emit('message:send', { conversationId: conversation.id, messageId: msg.id });
@@ -200,7 +240,13 @@ export function ChatWindow({ conversation, currentUser, onBack }: Props) {
   };
 
   return (
-    <div className="flex flex-col h-full">
+    <motion.div
+      className="flex flex-col h-full"
+      initial={{ opacity: 0, x: 30 }}
+      animate={{ opacity: 1, x: 0 }}
+      exit={{ opacity: 0, x: -30 }}
+      transition={{ duration: 0.25, ease: 'easeOut' }}
+    >
       {/* Header */}
       <header className="bg-white dark:bg-gray-800 px-4 py-2 flex items-center gap-3 border-b dark:border-gray-700">
         <button onClick={onBack} className="md:hidden p-1 rounded-full hover:bg-gray-100 dark:hover:bg-gray-700">
@@ -219,7 +265,17 @@ export function ChatWindow({ conversation, currentUser, onBack }: Props) {
           </div>
           <div className="text-xs text-gray-500">
             {otherTyping ? (
-              <span className="text-accent">در حال نوشتن...</span>
+              <motion.span
+                className="text-accent inline-flex items-center gap-1"
+                initial={{ opacity: 0 }}
+                animate={{ opacity: 1 }}
+              >
+                در حال نوشتن
+                <motion.span
+                  animate={{ opacity: [0.3, 1, 0.3] }}
+                  transition={{ duration: 1.2, repeat: Infinity }}
+                >...</motion.span>
+              </motion.span>
             ) : conversation.otherParticipant?.isOnline ? (
               <span className="text-accent">آنلاین</span>
             ) : conversation.otherParticipant?.lastSeen ? (
@@ -232,7 +288,7 @@ export function ChatWindow({ conversation, currentUser, onBack }: Props) {
       </header>
 
       {/* Messages */}
-      <div ref={containerRef} className="flex-1 overflow-y-auto chat-bg p-4">
+      <div ref={containerRef} onScroll={onScroll} className="flex-1 overflow-y-auto chat-bg p-4">
         {hasMore && (
           <div className="text-center mb-2">
             <button
@@ -251,28 +307,53 @@ export function ChatWindow({ conversation, currentUser, onBack }: Props) {
             <p>گفتگو را شروع کنید! یک پیام بفرستید.</p>
           </div>
         ) : (
-          [...messages].reverse().map((m) => (
-            <MessageBubble key={m.id} message={m} isMine={m.senderId === currentUser.id} />
-          ))
+          // Render messages in chronological order (oldest first → newest last)
+          <AnimatePresence initial={false}>
+            {messages.map((m, idx) => (
+              <motion.div
+                key={m.id}
+                layout
+                initial={{ opacity: 0, y: 20, scale: 0.95 }}
+                animate={{ opacity: 1, y: 0, scale: 1 }}
+                exit={{ opacity: 0, scale: 0.95 }}
+                transition={{ duration: 0.2, ease: 'easeOut' }}
+              >
+                <MessageBubble message={m} isMine={m.senderId === currentUser.id} />
+              </motion.div>
+            ))}
+          </AnimatePresence>
         )}
         <div ref={messagesEndRef} />
       </div>
 
       {/* Upload preview */}
-      {uploadState && (
-        <div className="bg-white dark:bg-gray-800 px-4 py-2 border-t dark:border-gray-700 flex items-center gap-3">
-          <div className="flex-1">
-            <div className="text-xs text-gray-600 dark:text-gray-300 mb-1 truncate">{uploadState.name}</div>
-            <div className="h-1.5 bg-gray-200 dark:bg-gray-700 rounded-full overflow-hidden">
-              <div className="h-full bg-accent transition-all" style={{ width: `${uploadState.percent}%` }} />
+      <AnimatePresence>
+        {uploadState && (
+          <motion.div
+            initial={{ height: 0, opacity: 0 }}
+            animate={{ height: 'auto', opacity: 1 }}
+            exit={{ height: 0, opacity: 0 }}
+            className="bg-white dark:bg-gray-800 px-4 py-2 border-t dark:border-gray-700 overflow-hidden"
+          >
+            <div className="flex items-center gap-3">
+              <div className="flex-1">
+                <div className="text-xs text-gray-600 dark:text-gray-300 mb-1 truncate">{uploadState.name}</div>
+                <div className="h-1.5 bg-gray-200 dark:bg-gray-700 rounded-full overflow-hidden">
+                  <motion.div
+                    className="h-full bg-accent"
+                    animate={{ width: `${uploadState.percent}%` }}
+                    transition={{ duration: 0.3 }}
+                  />
+                </div>
+              </div>
+              <span className="text-xs text-gray-500">{uploadState.percent}%</span>
+              <button onClick={cancelUpload} className="p-1 text-red-500 hover:bg-red-50 dark:hover:bg-red-900/20 rounded">
+                <X size={16} />
+              </button>
             </div>
-          </div>
-          <span className="text-xs text-gray-500">{uploadState.percent}%</span>
-          <button onClick={cancelUpload} className="p-1 text-red-500 hover:bg-red-50 dark:hover:bg-red-900/20 rounded">
-            <X size={16} />
-          </button>
-        </div>
-      )}
+          </motion.div>
+        )}
+      </AnimatePresence>
 
       {/* Composer */}
       <div className="bg-white dark:bg-gray-800 px-3 py-2 flex items-end gap-2 border-t dark:border-gray-700">
@@ -288,14 +369,15 @@ export function ChatWindow({ conversation, currentUser, onBack }: Props) {
           rows={1}
           className="flex-1 bg-gray-100 dark:bg-gray-700 rounded-2xl px-4 py-2.5 resize-none outline-none text-sm max-h-32"
         />
-        <button
+        <motion.button
+          whileTap={{ scale: 0.9 }}
           onClick={send}
           disabled={sending || (!text.trim() && !uploadState)}
           className="bg-accent text-white p-2.5 rounded-full hover:bg-accent-hover disabled:opacity-50 disabled:cursor-not-allowed"
         >
           {sending ? <div className="loader" style={{ width: 16, height: 16, borderWidth: 2 }} /> : <Send size={20} />}
-        </button>
+        </motion.button>
       </div>
-    </div>
+    </motion.div>
   );
 }
