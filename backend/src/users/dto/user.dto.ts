@@ -1,0 +1,28 @@
+import { IsOptional, IsString, IsInt, Min, Max } from 'class-validator';
+import { Type } from 'class-transformer';
+
+export class ListUsersQueryDto {
+  @IsOptional()
+  @IsString()
+  search?: string;
+
+  @IsOptional()
+  @Type(() => Number)
+  @IsInt()
+  @Min(1)
+  page: number = 1;
+
+  @IsOptional()
+  @Type(() => Number)
+  @IsInt()
+  @Min(1)
+  @Max(100)
+  pageSize: number = 50;
+}
+
+export class UpdateProfileDto {
+  @IsOptional() @IsString() firstName?: string;
+  @IsOptional() @IsString() lastName?: string;
+  @IsOptional() @IsString() avatarUrl?: string;
+  @IsOptional() @IsString() bio?: string;
+}

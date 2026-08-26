@@ -1,29 +1,39 @@
-# .NET
+# .NET / Node
 **/bin/
 **/obj/
-**/out/
-**/publish/
+**/dist/
+**/build/
 *.user
 *.suo
 .vs/
 .idea/
+node_modules/
 
 # Build artifacts
 *.dll
 *.pdb
 *.exe
-*.cache
 
 # Logs
 logs/
 *.log
 
-# Database & uploads (development)
+# Database & uploads
 *.db
 *.db-shm
 *.db-wal
-uploads/
-data/
+backend/uploads/
+backend/prisma/dev.db*
+backend/dev.db*
+
+# Environment & secrets
+.env
+.env.local
+.env.production
+.env.*.local
+appsettings.Production.json
+appsettings.Local.json
+secrets.json
 
 # IDE
 *.swp
@@ -31,18 +41,8 @@ data/
 .DS_Store
 Thumbs.db
 
-# Environment & secrets
-.env
-.env.local
-appsettings.Production.json
-appsettings.Local.json
-secrets.json
-
-# Node (legacy, not used)
-node_modules/
-package-lock.json
-bun.lock
-
 # Misc
 *.tmp
 *.bak
+coverage/
+.cache/

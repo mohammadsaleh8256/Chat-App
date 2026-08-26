@@ -1,0 +1,207 @@
+// Prisma schema for ChatApp — production-ready messenger
+// NOTE: SQLite doesn't support enums; we use String with a constant set of values.
+
+generator client {
+  provider = "prisma-client-js"
+}
+
+datasource db {
+  provider = "sqlite"
+  url      = env("DATABASE_URL")
+}
+
+model User {
+  id                String             @id @default(uuid())
+  firstName         String
+  lastName          String
+  fullName         String             @default("")
+  phoneNumber       String             @unique
+  phoneNumberHash   String             @unique
+  normalizedPhone   String             @unique
+  passwordHash      String
+  avatarUrl         String?
+  bio               String?
+  // role: "USER" | "ADMIN"
+  role              String             @default("USER")
+  // status: "ACTIVE" | "DISABLED" | "DELETED"
+  status            String             @default("ACTIVE")
+  isOnline          Boolean            @default(false)
+  lastSeen          DateTime?
+  createdAt         DateTime           @default(now())
+  updatedAt         DateTime           @updatedAt
+  deletedAt         DateTime?
+
+  conversations     ConversationParticipant[]
+  messages          Message[]
+  messageReads      MessageRead[]
+  refreshTokens     RefreshToken[]
+  attachments       Attachment[]
+  auditLogs         AuditLog[]
+
+  @@index([firstName, lastName])
+  @@index([role])
+  @@index([status])
+}
+
+model Conversation {
+  id                String             @id @default(uuid())
+  isGroup           Boolean            @default(false)
+  title             String?
+  lastMessageAt     DateTime?
+  lastMessagePreview String?
+  createdAt         DateTime           @default(now())
+  updatedAt         DateTime           @updatedAt
+  deletedAt         DateTime?
+
+  participants      ConversationParticipant[]
+  messages          Message[]
+
+  @@index([lastMessageAt])
+}
+
+model ConversationParticipant {
+  id                String             @id @default(uuid())
+  conversationId    String
+  userId            String
+  joinedAt          DateTime           @default(now())
+  lastReadAt        DateTime?
+  isMuted           Boolean            @default(false)
+  leftAt            DateTime?
+
+  conversation      Conversation       @relation(fields: [conversationId], references: [id], onDelete: Cascade)
+  user              User               @relation(fields: [userId], references: [id], onDelete: Cascade)
+
+  @@unique([conversationId, userId])
+  @@index([userId])
+  @@index([conversationId])
+}
+
+model Message {
+  id                String             @id @default(uuid())
+  conversationId    String
+  senderId          String
+  content           String             @default("")
+  // type: "TEXT" | "IMAGE" | "VIDEO" | "AUDIO" | "FILE"
+  type              String             @default("TEXT")
+  // status: "SENDING" | "SENT" | "DELIVERED" | "READ" | "FAILED"
+  status            String             @default("SENT")
+  replyToId         String?
+  forwardedFromId   String?
+  isEdited          Boolean            @default(false)
+  editedAt          DateTime?
+  deliveredAt       DateTime?
+  readAt            DateTime?
+  createdAt         DateTime           @default(now())
+  updatedAt         DateTime           @updatedAt
+  deletedAt         DateTime?
+
+  conversation      Conversation       @relation(fields: [conversationId], references: [id], onDelete: Cascade)
+  sender            User               @relation(fields: [senderId], references: [id], onDelete: Restrict)
+  replyTo           Message?           @relation("MessageReply", fields: [replyToId], references: [id])
+  replies           Message[]          @relation("MessageReply")
+  forwardedFrom     Message?           @relation("MessageForward", fields: [forwardedFromId], references: [id])
+  forwardedTo       Message[]          @relation("MessageForward")
+  attachments       Attachment[]
+  reads             MessageRead[]
+
+  @@index([conversationId, createdAt])
+  @@index([senderId])
+  @@index([status])
+}
+
+model MessageRead {
+  id                String             @id @default(uuid())
+  messageId         String
+  userId            String
+  readAt            DateTime           @default(now())
+
+  message           Message            @relation(fields: [messageId], references: [id], onDelete: Cascade)
+  user              User               @relation(fields: [userId], references: [id], onDelete: Cascade)
+
+  @@unique([messageId, userId])
+  @@index([userId])
+}
+
+model Attachment {
+  id                String             @id @default(uuid())
+  messageId         String?
+  uploaderId        String
+  originalFileName   String
+  storedFileName     String
+  storageKey         String
+  mimeType          String
+  size              BigInt
+  // type: "IMAGE" | "VIDEO" | "AUDIO" | "PDF" | "ZIP" | "RAR" | "DOCUMENT" | "SPREADSHEET" | "PRESENTATION" | "TEXT" | "OTHER"
+  type              String             @default("OTHER")
+  uploadId          String             @unique
+  // uploadStatus: "PENDING" | "UPLOADING" | "COMPLETED" | "FAILED" | "CANCELLED"
+  uploadStatus      String             @default("PENDING")
+  totalChunks       Int                @default(0)
+  receivedChunks    Int                @default(0)
+  uploadedBytes     BigInt             @default(0)
+  chunkDirectory    String?
+  fileHash          String?
+  thumbnailKey      String?
+  width             Int?
+  height            Int?
+  duration          Int?
+  createdAt         DateTime           @default(now())
+  updatedAt         DateTime           @updatedAt
+  completedAt       DateTime?
+  deletedAt         DateTime?
+
+  message           Message?           @relation(fields: [messageId], references: [id], onDelete: SetNull)
+  uploader          User               @relation(fields: [uploaderId], references: [id], onDelete: Restrict)
+
+  @@index([messageId])
+  @@index([uploaderId])
+  @@index([uploadStatus])
+  @@index([createdAt])
+}
+
+model RefreshToken {
+  id                String             @id @default(uuid())
+  userId            String
+  tokenHash         String             @unique
+  jwtId             String
+  expiresAt         DateTime
+  createdAt         DateTime           @default(now())
+  revokedAt         DateTime?
+  replacedByToken   String?
+  createdByIp       String?
+  revokeByIp        String?
+  reasonRevoked     String?
+
+  user              User               @relation(fields: [userId], references: [id], onDelete: Cascade)
+
+  @@index([userId])
+  @@index([tokenHash])
+}
+
+model AuditLog {
+  id                String             @id @default(uuid())
+  adminId           String
+  // action: see AuditAction enum values
+  action            String
+  targetUserId      String?
+  targetConversationId String?
+  targetMessageId   String?
+  targetAttachmentId String?
+  details           String?
+  ipAddress         String?
+  userAgent         String?
+  createdAt         DateTime           @default(now())
+
+  admin             User               @relation(fields: [adminId], references: [id], onDelete: Restrict)
+
+  @@index([adminId])
+  @@index([createdAt])
+  @@index([action])
+}
+
+model AppSetting {
+  key               String             @id
+  value             String
+  description       String?
+  updatedAt         DateTime           @updatedAt
+}
