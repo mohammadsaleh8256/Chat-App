@@ -1,14 +1,14 @@
 @page "/"
 @page "/login"
 @page "/register"
-@rendermode InteractiveServer
+@rendermode InteractiveServerNoPrerender
 @inject HttpClient Http
 @inject IJwtTokenStore Tokens
 @inject NavigationManager Nav
 @inject AuthenticationStateProvider AuthState
 @inject IAppToastService Toast
 
-<PageTitle>ورود - چت‌اپ</PageTitle>
+<PageTitle>@(Mode == "register" ? "ثبت‌نام" : "ورود") - چت‌اپ</PageTitle>
 
 <div class="auth-page">
     <div class="auth-card">
@@ -18,11 +18,11 @@
                     <path fill="currentColor" d="M12 2C6.5 2 2 6 2 11c0 1.8.6 3.5 1.6 5L2 22l6-1.6c1.5.7 3 1 4.5 1 5.5 0 10-4 10-9S17.5 2 12 2z"/>
                 </svg>
             </div>
-            <h1>@(Mode == "login" ? "ورود به چت‌اپ" : "ثبت‌نام در چت‌اپ")</h1>
+            <h1>@(Mode == "register" ? "ثبت‌نام در چت‌اپ" : "ورود به چت‌اپ")</h1>
             <p class="auth-subtitle">پیام‌رسان سریع و امن</p>
         </div>
 
-        <EditForm Model="@Form" OnValidSubmit="@SubmitAsync" FormName="auth">
+        <EditForm Model="@Form" OnValidSubmit="@SubmitAsync">
             <DataAnnotationsValidator />
 
             @if (Mode == "register")
@@ -65,37 +65,37 @@
                 }
                 else
                 {
-                    @(Mode == "login" ? "ورود" : "ثبت‌نام")
+                    @(Mode == "register" ? "ثبت‌نام" : "ورود")
                 }
             </button>
         </EditForm>
 
         <div class="auth-toggle">
-            @if (Mode == "login")
+            @if (Mode == "register")
             {
-                <span>حساب ندارید؟ <a href="/register" @onclick.prevent="@(() => SwitchMode("register"))">ثبت‌نام کنید</a></span>
+                <span>حساب دارید؟ <a href="/login">وارد شوید</a></span>
             }
             else
             {
-                <span>حساب دارید؟ <a href="/login" @onclick.prevent="@(() => SwitchMode("login"))">وارد شوید</a></span>
+                <span>حساب ندارید؟ <a href="/register">ثبت‌نام کنید</a></span>
             }
         </div>
     </div>
 </div>
 
 @code {
-    [Parameter] public string Mode { get; set; } = "login";
-
+    private string Mode { get; set; } = "login";
     private AuthFormDto Form { get; set; } = new();
     private bool Loading;
     private string? Error;
 
     protected override void OnInitialized()
     {
-        if (string.IsNullOrEmpty(Mode)) Mode = "login";
+        // Determine mode from URL since we use a single page for /, /login, and /register
+        var uri = Nav.ToBaseRelativePath(Nav.Uri);
+        var path = uri.Split('?')[0].Split('#')[0].TrimEnd('/');
+        Mode = path.Equals("register", StringComparison.OrdinalIgnoreCase) ? "register" : "login";
     }
-
-    private void SwitchMode(string m) { Mode = m; Error = null; }
 
     private async Task SubmitAsync()
     {
@@ -103,6 +103,22 @@
         Error = null;
         try
         {
+            // Manual validation for register mode (FirstName/LastName not [Required] in DTO
+            // so that login validation passes without them)
+            if (Mode == "register")
+            {
+                if (string.IsNullOrWhiteSpace(Form.FirstName))
+                {
+                    Error = "نام الزامی است.";
+                    return;
+                }
+                if (string.IsNullOrWhiteSpace(Form.LastName))
+                {
+                    Error = "نام خانوادگی الزامی است.";
+                    return;
+                }
+            }
+
             AuthResponse? auth = null;
             if (Mode == "login")
             {
@@ -130,7 +146,6 @@
             if (auth is not null)
             {
                 await Tokens.SetTokensAsync(auth.AccessToken, auth.RefreshToken);
-                // forceLoad ensures the AuthStateProvider reads the new token correctly during prerender
                 Nav.NavigateTo("/app", forceLoad: true);
             }
         }
@@ -159,10 +174,10 @@
 
     public class AuthFormDto
     {
-        [System.ComponentModel.DataAnnotations.Required(ErrorMessage = "نام الزامی است.")]
+        // FirstName/LastName are NOT [Required] at the DTO level so that login-mode
+        // validation passes without them. They're checked manually in SubmitAsync
+        // when Mode == "register".
         public string? FirstName { get; set; }
-
-        [System.ComponentModel.DataAnnotations.Required(ErrorMessage = "نام خانوادگی الزامی است.")]
         public string? LastName { get; set; }
 
         [System.ComponentModel.DataAnnotations.Required(ErrorMessage = "شماره تلفن الزامی است.")]
