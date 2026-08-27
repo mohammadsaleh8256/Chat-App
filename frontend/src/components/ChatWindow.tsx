@@ -53,12 +53,21 @@ export function ChatWindow({ conversation, currentUser, onBack }: Props) {
         const oldest = sorted[0].createdAt;
         setOldestAt(oldest);
         setHasMore(data.items.length >= PAGE_SIZE);
+
+        // Mark as delivered (so sender sees double-tick)
+        api.post(`/conversations/${conversation.id}/delivered`).catch(() => {});
+
+        // Mark the latest message from the OTHER party as READ.
+        // Backend will mark all prior unread messages from them as READ too,
+        // and emit 'message:read' so the sender's UI updates to blue double-tick.
+        const lastFromOther = [...sorted].reverse().find((m) => m.senderId !== currentUser.id);
+        if (lastFromOther) {
+          api.post(`/messages/${lastFromOther.id}/read`).catch(() => {});
+        }
       }
-      // Mark as delivered
-      api.post(`/conversations/${conversation.id}/delivered`).catch(() => {});
       setTimeout(() => scrollToBottom(false), 100);
     } catch {} finally { setLoading(false); }
-  }, [conversation.id, scrollToBottom]);
+  }, [conversation.id, currentUser.id, scrollToBottom]);
 
   useEffect(() => {
     loadMessages();
@@ -75,7 +84,11 @@ export function ChatWindow({ conversation, currentUser, onBack }: Props) {
               if (prev.some(m => m.id === newMsg.id)) return prev;
               return [...prev, newMsg];  // append to end (newest at bottom)
             });
+            // Since the user is currently viewing this chat, mark the message as delivered + read
             chatSocket.emit('message:delivered', { conversationId: conversation.id, messageId: newMsg.id });
+            if (newMsg.senderId !== currentUser.id) {
+              api.post(`/messages/${newMsg.id}/read`).catch(() => {});
+            }
             setTimeout(() => scrollToBottom(), 100);
           }
         })

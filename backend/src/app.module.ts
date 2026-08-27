@@ -19,7 +19,9 @@ import { ChatGatewayModule } from './common/gateway/chat-gateway.module';
       envFilePath: [path.join(__dirname, '..', '.env'), '.env'],
     }),
     ThrottlerModule.forRoot([
-      { ttl: 10_000, limit: 200 }, // global: 200 req per 10s per IP
+      // 1000 req per 10s per IP — high enough for chat polling + socket reconnects,
+      // but still blocks brute-force / abuse. Tune via env if needed.
+      { ttl: 10_000, limit: 1000 },
     ]),
     PrismaModule,
     AuthModule,

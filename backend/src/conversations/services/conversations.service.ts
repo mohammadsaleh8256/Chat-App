@@ -77,13 +77,20 @@ export class ConversationsService {
       }),
     ]);
 
-    const enriched = await Promise.all(items.map(async (c) => {
+    // Filter out conversations that don't have an "other" participant
+    // (orphaned conversations where the other party left/was deleted).
+    const valid = items.filter((c) => {
+      const other = c.participants.find((p) => p.userId !== currentUserId);
+      return other && other.user && !other.user.deletedAt;
+    });
+
+    const enriched = await Promise.all(valid.map(async (c) => {
       const dto = this.toDto(c, currentUserId);
       dto.unreadCount = await this.getUnreadCount(currentUserId, c.id);
       return dto;
     }));
 
-    return { items: enriched, total, page: q.page, pageSize: q.pageSize };
+    return { items: enriched, total: enriched.length, page: q.page, pageSize: q.pageSize };
   }
 
   async getConversation(currentUserId: string, conversationId: string) {

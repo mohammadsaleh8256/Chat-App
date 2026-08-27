@@ -60,7 +60,17 @@ export class MessagesService {
 
     if (!dto.attachmentId) throw new BadRequestException('attachmentId الزامی است.');
 
-    const attachment = await this.prisma.attachment.findUnique({ where: { uploadId: dto.attachmentId } });
+    // dto.attachmentId could be either the attachment's UUID or the uploadId.
+    // The frontend uploader returns attachment.id from /files/upload/complete,
+    // so look up by id first, then fall back to uploadId.
+    const attachment = await this.prisma.attachment.findFirst({
+      where: {
+        OR: [
+          { id: dto.attachmentId },
+          { uploadId: dto.attachmentId },
+        ],
+      },
+    });
     if (!attachment) throw new NotFoundException('فایل یافت نشد.');
     if (attachment.uploaderId !== senderId) throw new ForbiddenException('این فایل متعلق به شما نیست.');
     if (attachment.uploadStatus !== 'COMPLETED')

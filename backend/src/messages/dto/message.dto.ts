@@ -3,7 +3,7 @@ import { Type } from 'class-transformer';
 
 export class SendMessageDto {
   @IsString()
-  @IsNotEmpty({ message: 'محتوای پیام خالی است.' })
+  // Allow empty content when an attachment is present (file-only messages)
   content!: string;
 
   @IsOptional()

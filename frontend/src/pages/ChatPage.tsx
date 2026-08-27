@@ -21,41 +21,57 @@ export default function ChatPage() {
   const [selected, setSelected] = useState<Conversation | null>(null);
   const [mobileShowChat, setMobileShowChat] = useState(false);
   const refreshTimerRef = useRef<any>(null);
+  const selectedRef = useRef<Conversation | null>(null);
+  const reloadTimerRef = useRef<any>(null);
+
+  // Keep selectedRef in sync so loadConversations can read current selection
+  // without depending on it (which would cause re-render loops).
+  useEffect(() => { selectedRef.current = selected; }, [selected]);
 
   const loadConversations = useCallback(async () => {
     try {
       const { data } = await api.get<{ items: Conversation[] }>('/conversations');
       // Deduplicate by id (safety against any backend duplication bug)
+      // and filter out conversations without an otherParticipant (orphaned/invalid)
       const seen = new Set<string>();
       const unique = data.items.filter((c) => {
         if (seen.has(c.id)) return false;
+        if (!c.otherParticipant) return false;  // skip orphaned conversations
         seen.add(c.id);
         return true;
       });
       setConversations(unique);
       // Preserve selected conversation reference (re-load its data so unread count etc. update)
-      if (selected) {
-        const updated = unique.find((c) => c.id === selected.id);
-        if (updated && updated !== selected) {
+      const sel = selectedRef.current;
+      if (sel) {
+        const updated = unique.find((c) => c.id === sel.id);
+        if (updated) {
           // If user is currently viewing this conversation, keep unread at 0
+          selectedRef.current = { ...updated, unreadCount: 0 };
           setSelected({ ...updated, unreadCount: 0 });
         }
       }
     } catch {} finally { setLoading(false); }
-  }, [selected]);
+  }, []);
+
+  // Debounced reload — multiple socket events in quick succession only trigger one reload
+  const debouncedReload = useCallback(() => {
+    if (reloadTimerRef.current) clearTimeout(reloadTimerRef.current);
+    reloadTimerRef.current = setTimeout(() => { loadConversations(); }, 500);
+  }, [loadConversations]);
 
   useEffect(() => {
     loadConversations();
     // Connect socket if not already connected
     chatSocket.connect();
 
-    // Subscribe to socket events for conversation updates
-    const offReceive = chatSocket.on('message:receive', () => loadConversations());
-    const offConvUpdated = chatSocket.on('conversation:updated', () => loadConversations());
-    const offOnline = chatSocket.on('user:online', () => loadConversations());
-    const offOffline = chatSocket.on('user:offline', () => loadConversations());
+    // Subscribe to socket events for conversation updates (debounced to avoid spam)
+    const offReceive = chatSocket.on('message:receive', debouncedReload);
+    const offConvUpdated = chatSocket.on('conversation:updated', debouncedReload);
+    const offOnline = chatSocket.on('user:online', debouncedReload);
+    const offOffline = chatSocket.on('user:offline', debouncedReload);
 
-    // Periodic refresh as a safety net
+    // Periodic refresh as a safety net (every 30s, not too frequent)
     refreshTimerRef.current = setInterval(loadConversations, 30_000);
     return () => {
       offReceive();
@@ -63,8 +79,9 @@ export default function ChatPage() {
       offOnline();
       offOffline();
       if (refreshTimerRef.current) clearInterval(refreshTimerRef.current);
+      if (reloadTimerRef.current) clearTimeout(reloadTimerRef.current);
     };
-  }, [loadConversations]);
+  }, [loadConversations, debouncedReload]);
 
   useEffect(() => {
     if (!search.trim()) setFiltered(conversations);
