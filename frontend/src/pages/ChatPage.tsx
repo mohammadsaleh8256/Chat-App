@@ -109,10 +109,14 @@ export default function ChatPage() {
   }
 
   return (
-    <div className="flex h-full w-full">
-      {/* Sidebar */}
-      <aside className={`w-full md:w-80 flex flex-col bg-white dark:bg-gray-800 border-l dark:border-gray-700 ${mobileShowChat && selected ? 'hidden md:flex' : 'flex'}`}>
-        <div className="bg-primary text-white p-3 flex items-center justify-between gap-2">
+    // h-screen ensures the layout always fills the viewport, even when empty.
+    // overflow-hidden prevents the whole page from scrolling.
+    <div className="flex h-screen w-full overflow-hidden bg-gray-100 dark:bg-gray-900">
+      {/* Sidebar — fixed width on desktop, full width on mobile.
+          flex-col + min-h-0 lets the conversation list scroll independently. */}
+      <aside className={`w-full md:w-80 lg:w-96 flex flex-col min-h-0 bg-white dark:bg-gray-800 border-l dark:border-gray-700 flex-shrink-0 ${mobileShowChat && selected ? 'hidden md:flex' : 'flex'}`}>
+        {/* Header — fixed height, doesn't scroll */}
+        <div className="bg-primary text-white p-3 flex items-center justify-between gap-2 flex-shrink-0">
           <div className="flex items-center gap-3 min-w-0">
             <Avatar name={user?.fullName} url={user?.avatarUrl} size={36} />
             <div className="min-w-0">
@@ -135,7 +139,8 @@ export default function ChatPage() {
           </div>
         </div>
 
-        <div className="p-2 bg-white dark:bg-gray-800 border-b dark:border-gray-700">
+        {/* Search bar — fixed height, doesn't scroll */}
+        <div className="p-2 bg-white dark:bg-gray-800 border-b dark:border-gray-700 flex-shrink-0">
           <div className="relative">
             <Search size={16} className="absolute right-3 top-1/2 -translate-y-1/2 text-gray-400" />
             <input
@@ -148,16 +153,20 @@ export default function ChatPage() {
           </div>
         </div>
 
-        <ConversationList
-          conversations={filtered}
-          loading={loading}
-          selectedId={selected?.id}
-          onSelect={selectConversation}
-        />
+        {/* Conversation list — flex-1 + min-h-0 + overflow-y-auto = independent scrollbar */}
+        <div className="flex-1 min-h-0 overflow-y-auto">
+          <ConversationList
+            conversations={filtered}
+            loading={loading}
+            selectedId={selected?.id}
+            onSelect={selectConversation}
+          />
+        </div>
       </aside>
 
-      {/* Chat Window */}
-      <main className={`flex-1 flex flex-col overflow-hidden ${!mobileShowChat || !selected ? 'hidden md:flex' : 'flex'}`}>
+      {/* Chat Window area — flex-1 fills remaining width.
+          min-h-0 + overflow-hidden prevents page-level scroll. */}
+      <main className={`flex-1 flex flex-col min-h-0 overflow-hidden ${!mobileShowChat || !selected ? 'hidden md:flex' : 'flex'}`}>
         <AnimatePresence mode="wait">
           {selected ? (
             <ChatWindow

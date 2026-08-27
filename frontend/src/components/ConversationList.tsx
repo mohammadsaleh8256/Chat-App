@@ -34,7 +34,7 @@ export function ConversationList({ conversations, loading, selectedId, onSelect 
     );
   }
   return (
-    <div className="overflow-y-auto">
+    <div>
       {conversations.map((c) => (
         <button
           key={c.id}
