@@ -124,9 +124,21 @@ export function ChatWindow({ conversation, currentUser, onBack }: Props) {
 
     const offRead = chatSocket.on('message:read', (data: any) => {
       if (data.conversationId !== conversation.id) return;
-      setMessages((prev) => prev.map(m => m.id === data.messageId && m.senderId === currentUser.id
-        ? { ...m, status: 'READ', readAt: new Date().toISOString(), deliveredAt: m.deliveredAt || new Date().toISOString() }
-        : m));
+      // The recipient marked a message as read — backend marks ALL prior messages
+      // from the sender as READ too, so we update all my messages up to that one.
+      setMessages((prev) => {
+        // Find the target message's createdAt
+        const target = prev.find((m) => m.id === data.messageId);
+        if (!target) return prev;
+        const now = new Date().toISOString();
+        return prev.map((m) => {
+          // Update all MY messages up to and including the target to READ
+          if (m.senderId === currentUser.id && m.createdAt <= target.createdAt && m.status !== 'READ') {
+            return { ...m, status: 'READ', readAt: now, deliveredAt: m.deliveredAt || now };
+          }
+          return m;
+        });
+      });
     });
 
     return () => {

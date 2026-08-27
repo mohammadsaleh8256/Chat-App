@@ -1,6 +1,6 @@
-import { useState } from 'react';
 import type { Message } from '../types';
 import { formatFileSize, formatTime, isImageType, isVideoType, isAudioType } from '../utils';
+import { tokenStorage } from '../services/api';
 import { Check, CheckCheck, AlertCircle, Clock, FileText, Download } from 'lucide-react';
 
 interface Props {
@@ -15,6 +15,36 @@ function StatusIcon({ status }: { status: Message['status'] }) {
   if (status === 'READ') return <CheckCheck size={14} className="text-sky-400" />;
   if (status === 'FAILED') return <AlertCircle size={14} className="text-red-500" />;
   return null;
+}
+
+/** Build a streaming URL that includes the access token as a query param.
+ *  This is needed because <img>, <video>, <audio> tags can't set Authorization headers. */
+function streamUrl(attachmentId: string): string {
+  const token = tokenStorage.getAccess();
+  return `/api/files/${attachmentId}/stream?token=${encodeURIComponent(token || '')}`;
+}
+
+/** For downloads, we need to use fetch + blob since <a> can't set headers either. */
+async function downloadFile(attachmentId: string, fileName: string) {
+  const token = tokenStorage.getAccess();
+  if (!token) return;
+  try {
+    const resp = await fetch(`/api/files/${attachmentId}`, {
+      headers: { Authorization: `Bearer ${token}` },
+    });
+    if (!resp.ok) throw new Error('Download failed');
+    const blob = await resp.blob();
+    const url = URL.createObjectURL(blob);
+    const a = document.createElement('a');
+    a.href = url;
+    a.download = fileName;
+    document.body.appendChild(a);
+    a.click();
+    document.body.removeChild(a);
+    URL.revokeObjectURL(url);
+  } catch (err) {
+    console.error('Download error:', err);
+  }
 }
 
 export function MessageBubble({ message, isMine }: Props) {
@@ -69,32 +99,31 @@ export function MessageBubble({ message, isMine }: Props) {
 function AttachmentView({ attachment }: { attachment: Message['attachments'][0] }) {
   const size = parseInt(attachment.size, 10);
   const mimeType = attachment.mimeType;
+  const url = streamUrl(attachment.id);
 
   if (isImageType(mimeType)) {
     return (
       <div className="relative">
         <img
-          src={`/api/files/${attachment.id}`}
+          src={url}
           alt={attachment.originalFileName}
           className="rounded-lg max-w-full max-h-80 cursor-pointer"
           loading="lazy"
-          onClick={() => window.open(`/api/files/${attachment.id}`, '_blank')}
+          onClick={() => window.open(url, '_blank')}
         />
       </div>
     );
   }
   if (isVideoType(mimeType)) {
-    return <video src={`/api/files/${attachment.id}`} controls className="rounded-lg max-w-full max-h-80" />;
+    return <video src={url} controls className="rounded-lg max-w-full max-h-80" />;
   }
   if (isAudioType(mimeType)) {
-    return <audio src={`/api/files/${attachment.id}`} controls className="w-full" />;
+    return <audio src={url} controls className="w-full" />;
   }
   return (
-    <a
-      href={`/api/files/${attachment.id}`}
-      target="_blank"
-      rel="noopener noreferrer"
-      className="flex items-center gap-2 px-3 py-2 bg-black/5 dark:bg-white/10 rounded text-sm hover:bg-black/10 dark:hover:bg-white/15"
+    <button
+      onClick={() => downloadFile(attachment.id, attachment.originalFileName)}
+      className="flex items-center gap-2 px-3 py-2 bg-black/5 dark:bg-white/10 rounded text-sm hover:bg-black/10 dark:hover:bg-white/15 w-full text-right"
     >
       <FileText size={24} className="text-gray-500 dark:text-gray-300" />
       <div className="flex-1 min-w-0">
@@ -102,6 +131,6 @@ function AttachmentView({ attachment }: { attachment: Message['attachments'][0] 
         <div className="text-[10px] opacity-60">{formatFileSize(size)}</div>
       </div>
       <Download size={16} />
-    </a>
+    </button>
   );
 }

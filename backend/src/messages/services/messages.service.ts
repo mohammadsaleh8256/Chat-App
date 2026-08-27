@@ -149,6 +149,19 @@ export class MessagesService {
     if (!await this.conversations.isMember(userId, conversationId))
       throw new ForbiddenException('شما به این گفتگو دسترسی ندارید.');
 
+    // Find all SENT messages from others (so we can emit events for each)
+    const sentMessages = await this.prisma.message.findMany({
+      where: {
+        conversationId,
+        senderId: { not: userId },
+        status: 'SENT',
+        deletedAt: null,
+      },
+      select: { id: true },
+    });
+
+    if (sentMessages.length === 0) return;
+
     await this.prisma.message.updateMany({
       where: {
         conversationId,
@@ -158,6 +171,11 @@ export class MessagesService {
       },
       data: { status: 'DELIVERED', deliveredAt: new Date() },
     });
+
+    // Emit delivered event for each message so sender sees double-tick
+    for (const m of sentMessages) {
+      this.chatEvents.emitMessageDelivered(conversationId, m.id, userId);
+    }
   }
 
   async markRead(userId: string, messageId: string) {
@@ -189,6 +207,9 @@ export class MessagesService {
         },
         data: { status: 'READ', readAt: new Date() },
       });
+
+      // Emit socket event so the SENDER's UI updates to blue double-tick
+      this.chatEvents.emitMessageRead(msg.conversationId, messageId, userId);
     }
   }
 
